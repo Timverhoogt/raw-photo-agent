@@ -1,0 +1,30 @@
+{
+  "name": "raw-photo-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local, reversible Lightroom Classic editing controller",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "cli": "node src/cli.ts"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Timverhoogt/raw-photo-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Timverhoogt/raw-photo-agent/issues"
+  },
+  "homepage": "https://github.com/Timverhoogt/raw-photo-agent#readme"
+}

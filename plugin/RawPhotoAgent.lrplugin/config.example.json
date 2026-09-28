@@ -1,0 +1,4 @@
+{
+  "bridgeDir": "/absolute/path/to/raw-photo-agent/.runtime/bridge",
+  "exportRoot": "/absolute/path/to/raw-photo-agent/.runtime/renders"
+}
