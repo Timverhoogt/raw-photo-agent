@@ -38,6 +38,11 @@
           <span id="session-badge" class="session-badge">READY WHEN YOU ARE</span>
         </div>
 
+        <nav class="workspace-navigation" aria-label="Photo workspace">
+          <button id="new-photo" class="button button-primary" type="button" hidden>New photo</button>
+          <button id="previous-result" class="text-button" type="button" hidden>View previous result</button>
+        </nav>
+
         <section id="setup-panel" class="setup-panel" aria-label="Start a photo edit">
           <div class="setup-topline"><h2>Choose a photograph</h2><span class="step-number">01 / BEGIN</span></div>
           <div class="setup-grid">
@@ -54,7 +59,7 @@
               </div>
               <div id="selected-source-note" class="selected-source-note" hidden><svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg><div><strong>Use the photograph already selected.</strong><p>Select exactly one RAW in Lightroom Classic. The agent works on a separate virtual copy.</p></div></div>
             </div>
-            <div class="intention-field"><label for="intent">What would you like this photo to feel like? <span>Optional</span></label><textarea id="intent" rows="2" maxlength="1600" placeholder="Natural and quiet. Bring out the subject, keep the atmosphere."></textarea></div>
+            <div class="intention-field"><label for="intent">What would you like this photo to feel like? <span>Optional</span></label><textarea id="intent" rows="2" maxlength="1600" placeholder="Leave blank for a natural edit that preserves realistic color and detail."></textarea></div>
           </div>
           <div class="launch-row"><p class="privacy-note">The source RAW stays on your Mac. JPEG previews are sent through your signed-in Codex account for visual review.</p><button id="start-button" class="button button-primary" type="button" disabled>Begin the edit<svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button></div>
           <p id="start-hint" class="start-hint">Connecting to the local bridge…</p>

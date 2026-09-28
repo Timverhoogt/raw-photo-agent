@@ -42,6 +42,7 @@ let busy = false;
 let awaitingSession = false;
 let launchPreviousId = null;
 let showSetup = false;
+let receivedState = false;
 let displayedCandidateId = null;
 let followCurrent = true;
 let viewMode = 'after';
@@ -95,8 +96,13 @@ function safePreviewUrl(value) {
   }
 }
 
+function visibleSession() {
+  return showSetup ? null : state.session;
+}
+
 function candidates() {
-  return Array.isArray(state.session?.candidates) ? state.session.candidates : [];
+  const session = visibleSession();
+  return Array.isArray(session?.candidates) ? session.candidates : [];
 }
 
 function findCandidate(id) {
@@ -189,9 +195,9 @@ function renderControls() {
   $('clear-file').disabled = busy || awaitingSession;
   $('intent').disabled = busy || awaitingSession;
   $('open-lightroom').disabled = !canMutate();
-  $('session-controls').hidden = !session || TERMINAL.has(status) || status === 'awaiting_choice';
+  $('session-controls').hidden = showSetup || !session || TERMINAL.has(status) || status === 'awaiting_choice';
   $('pause-button').hidden = status === 'paused';
-  $('pause-button').disabled = !canMutate() || !['preparing', 'running', 'awaiting_answer'].includes(status);
+  $('pause-button').disabled = !canMutate() || !['preparing', 'running'].includes(status);
   $('pause-button').lastChild.textContent = status === 'pausing' ? 'Pausing…' : 'Pause';
   $('resume-button').hidden = status !== 'paused';
   $('resume-button').disabled = !ready;
@@ -202,7 +208,7 @@ function renderControls() {
 }
 
 function renderSession() {
-  const session = state.session;
+  const session = visibleSession();
   const status = session?.status;
   const active = ACTIVE.has(status);
   $('setup-panel').hidden = Boolean(session && !showSetup);
@@ -228,6 +234,11 @@ function renderSession() {
   const statusText = session ? (session.error || (connected ? $('stage-text').textContent : 'Connection lost. Showing the last received session state.')) : 'Waiting for a photograph';
   $('journal-state').textContent = statusText;
   $('new-session').hidden = !session || !TERMINAL.has(status) || showSetup;
+  $('new-photo').hidden = !session || !TERMINAL.has(status);
+  $('new-photo').disabled = !canMutate();
+  $('previous-result').hidden = !showSetup || !state.session || !TERMINAL.has(state.session.status);
+  $('previous-result').textContent = state.session?.status === 'error' ? 'View previous session' : 'View previous result';
+  $('previous-result').disabled = busy || awaitingSession;
   $('completion-panel').hidden = status !== 'completed';
   const selected = findCandidate(session?.selectedCandidateId);
   $('completion-title').textContent = selected ? `${selected.label || 'Your selected photograph'}, retained.` : 'Your session is complete.';
@@ -259,10 +270,10 @@ function renderPreview() {
   $('view-before').disabled = !safePreviewUrl(candidates()[0]?.url);
   $('view-after').disabled = !safePreviewUrl(currentCandidate()?.url);
   $('view-before').setAttribute('aria-pressed', String(isBefore));
-  $('view-after').setAttribute('aria-pressed', String(!isBefore));
+  $('view-after').setAttribute('aria-pressed', String(!isBefore && followCurrent));
   $('view-before').classList.toggle('active', isBefore);
-  $('view-after').classList.toggle('active', !isBefore);
-  $('preview-label').textContent = state.session?.name || 'YOUR PHOTOGRAPH';
+  $('view-after').classList.toggle('active', !isBefore && followCurrent);
+  $('preview-label').textContent = visibleSession()?.name || 'YOUR PHOTOGRAPH';
   $('preview-detail').textContent = shown?.description || 'Original RAW → native Lightroom edit → preview';
   $('preview-caption').textContent = isBefore ? 'BEFORE · ORIGINAL EDIT STATE' : (shown?.label || 'CURRENT VERSION');
   $('preview-caption').hidden = !url;
@@ -339,7 +350,8 @@ function changeLabels(changes) {
 }
 
 function renderJournal() {
-  const events = Array.isArray(state.session?.events) ? state.session.events : [];
+  const session = visibleSession();
+  const events = Array.isArray(session?.events) ? session.events : [];
   $('journal-empty').hidden = Boolean(events.length);
   const signature = JSON.stringify(events);
   if (signature === journalSignature) return;
@@ -376,7 +388,7 @@ function renderJournal() {
 }
 
 function renderChoice() {
-  const session = state.session;
+  const session = visibleSession();
   const comparison = session?.status === 'awaiting_choice' ? session.comparison : null;
   const question = session?.status === 'awaiting_answer' ? session.question : null;
   const visible = Boolean(comparison || question);
@@ -437,16 +449,21 @@ function applyState(next) {
   state = next;
   const id = state.session?.id || null;
   if (awaitingSession && id && id !== launchPreviousId) awaitingSession = false;
-  if (sessionIdentity !== id) {
+  if (!receivedState || sessionIdentity !== id) {
     sessionIdentity = id;
     displayedCandidateId = null;
     followCurrent = true;
     viewMode = 'after';
-    showSetup = false;
+    // A completed session is history, not the default start screen. An active
+    // session always wins over a saved request to show the uploader.
+    const view = new URL(location.href).searchParams.get('view');
+    showSetup = !state.session || (TERMINAL.has(state.session.status)
+      && (view === 'new' || (state.session.status === 'completed' && view !== 'last')));
     choiceIdentity = '';
     filmstripSignature = '';
     journalSignature = '';
   }
+  receivedState = true;
   renderConnection();
   renderSession();
   renderPreview();
@@ -537,7 +554,7 @@ async function beginSession() {
   launchPreviousId = state.session?.id || null;
   setBusy(true);
   try {
-    const intent = $('intent').value.trim();
+    const intent = $('intent').value.trim() || 'Natural photographic rendering; emphasize the subject and light while preserving realistic color, atmosphere, and detail.';
     if (sourceMode === 'upload') {
       const result = await request('/api/uploads', selectedFile, {
         headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(selectedFile.name) },
@@ -549,6 +566,9 @@ async function beginSession() {
     }
     awaitingSession = true;
     showSetup = false;
+    const url = new URL(location.href);
+    url.searchParams.delete('view');
+    history.replaceState(null, '', url);
     await readState();
   } catch (error) {
     showError(error.message);
@@ -628,6 +648,7 @@ $('view-after').addEventListener('click', () => {
   viewMode = 'after'; followCurrent = true; displayedCandidateId = null; renderPreview();
 });
 $('main-preview').addEventListener('load', () => {
+  if (!currentPreviewUrl || showSetup) return;
   $('main-preview').hidden = false;
   $('image-load-note').hidden = true;
   $('preview-empty').hidden = true;
@@ -640,11 +661,45 @@ $('main-preview').addEventListener('error', () => {
   $('image-load-note').textContent = 'This recorded preview could not be loaded. Check the local bridge or inspect the version in Lightroom.';
   $('image-load-note').hidden = false;
 });
-$('new-session').addEventListener('click', () => {
-  showSetup = true;
+function renderWorkspace() {
   renderSession();
-  $('setup-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  renderPreview();
+  renderJournal();
+  renderChoice();
+  renderControls();
+}
+
+function newPhoto() {
+  if (!state.session || !TERMINAL.has(state.session.status) || busy || awaitingSession) return;
+  showSetup = true;
+  selectedFile = null;
+  $('raw-file').value = '';
+  $('intent').value = '';
+  $('file-label').textContent = 'Drop your RAW here';
+  $('file-hint').textContent = 'or choose a file · up to 200 MiB';
+  $('clear-file').hidden = true;
+  $('message-banner').hidden = true;
+  displayedCandidateId = null;
+  followCurrent = true;
+  viewMode = 'after';
+  selectSource('upload');
+  const url = new URL(location.href);
+  url.searchParams.set('view', 'new');
+  history.replaceState(null, '', url);
+  renderWorkspace();
+  $('workspace-title').scrollIntoView({ behavior: 'instant', block: 'start' });
   $('source-upload').focus({ preventScroll: true });
+  announce('Choose a new RAW photo. The previous result is saved.');
+}
+$('new-session').addEventListener('click', newPhoto);
+$('new-photo').addEventListener('click', newPhoto);
+$('previous-result').addEventListener('click', () => {
+  if (!state.session || !TERMINAL.has(state.session.status) || busy || awaitingSession) return;
+  showSetup = false;
+  const url = new URL(location.href);
+  url.searchParams.set('view', 'last');
+  history.replaceState(null, '', url);
+  renderWorkspace();
 });
 $('dismiss-message').addEventListener('click', () => { $('message-banner').hidden = true; });
 $('open-lightroom').addEventListener('click', async () => {
