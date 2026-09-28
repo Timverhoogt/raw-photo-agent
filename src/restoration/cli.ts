@@ -24,7 +24,7 @@ Analyze reads saved TIFFs only and prints a separate report; it never calls Ligh
 Resume-import is only for an explicitly reconciled single import failure with no working copy or mask.
 It requires the shared lock to be free, verifies the selected original and staged RAW/XMP hashes,
 and creates a new experiment with the prior recipe. It never repeats import or changes the failed report.
-Checkpoint-controls requires the exact restored diagnostic copy selected. It creates a separate copy
+Checkpoint-controls requires the exact recorded diagnostic copy selected. It creates a separate copy
 and captures three TIFFs each unchanged, after saving a checkpoint, and after a no-op baseline restore.
 An explicit source-baseline JSON {state, reason} starts a new diagnostic baseline after a separately
 inspected state change. It preserves the historical state and does not claim equivalence or recovery.
