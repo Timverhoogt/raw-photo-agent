@@ -46,6 +46,11 @@ let receivedState = false;
 let displayedCandidateId = null;
 let followCurrent = true;
 let viewMode = 'after';
+let inspectionMode = 'overview';
+let detailRegionId = null;
+let detailScale = 'fit';
+let detailSignature = '';
+let reviewTimer = null;
 let sessionIdentity = null;
 let currentPreviewUrl = null;
 let previewError = false;
@@ -100,6 +105,10 @@ function visibleSession() {
   return showSetup ? null : state.session;
 }
 
+function sessionEnded(session = state.session) {
+  return Boolean(session && TERMINAL.has(session.status) && session.retryable !== true);
+}
+
 function candidates() {
   const session = visibleSession();
   return Array.isArray(session?.candidates) ? session.candidates : [];
@@ -118,7 +127,27 @@ function currentCandidate() {
 
 function shownCandidate() {
   if (viewMode === 'before') return candidates()[0];
+  return selectedPreviewCandidate();
+}
+
+function selectedPreviewCandidate() {
   return (followCurrent ? currentCandidate() : findCandidate(displayedCandidateId)) || currentCandidate();
+}
+
+function validDetails(candidate) {
+  return (Array.isArray(candidate?.details) ? candidate.details : []).filter((detail) =>
+    detail && typeof detail.id === 'string' && safePreviewUrl(detail.url)
+    && ['width', 'height', 'sourceWidth', 'sourceHeight'].every((key) => Number.isInteger(detail[key]) && detail[key] > 0)
+    && Number.isFinite(detail.x) && Number.isFinite(detail.y));
+}
+
+function comparableDetails(candidate) {
+  const baseline = validDetails(candidates()[0]);
+  return validDetails(candidate).flatMap((detail) => {
+    const before = baseline.find((item) => item.id === detail.id
+      && ['x', 'y', 'width', 'height', 'sourceWidth', 'sourceHeight'].every((key) => item[key] === detail[key]));
+    return before ? [{ before, after: detail }] : [];
+  });
 }
 
 function canMutate() {
@@ -176,7 +205,8 @@ function startHint() {
   if (!connected) return transportError || 'Connecting to the local bridge…';
   if (!state.connection?.online) return state.connection?.message || 'Open Lightroom Classic and start the local bridge to begin.';
   if (!state.agent?.available) return state.agent?.message || 'The agent is unavailable. Start the signed-in Codex agent connection to begin.';
-  if (state.session && !TERMINAL.has(state.session.status)) return 'Finish the current session before starting another photograph.';
+  if (state.session?.retryable === true) return 'Retry the review or finish this session before starting another photograph.';
+  if (state.session && !sessionEnded()) return 'Finish the current session before starting another photograph.';
   if (sourceMode === 'upload' && !selectedFile) return 'Choose a RAW file to begin. Your original will be preserved.';
   return sourceMode === 'selected' ? 'The selected RAW will be checked before a working virtual copy is created.' : 'Ready to create a working copy in Lightroom Classic.';
 }
@@ -185,7 +215,7 @@ function renderControls() {
   const session = state.session;
   const status = session?.status;
   const ready = canMutate() && state.connection?.online && state.agent?.available;
-  $('start-button').disabled = !(ready && (!session || TERMINAL.has(status)) && (sourceMode === 'selected' || selectedFile));
+  $('start-button').disabled = !(ready && (!session || sessionEnded(session)) && (sourceMode === 'selected' || selectedFile));
   $('start-button').firstChild.textContent = busy || awaitingSession ? 'Preparing…' : 'Begin the edit';
   $('start-hint').textContent = startHint();
   $('start-hint').classList.toggle('problem', connected && (!state.connection?.online || !state.agent?.available));
@@ -195,12 +225,14 @@ function renderControls() {
   $('clear-file').disabled = busy || awaitingSession;
   $('intent').disabled = busy || awaitingSession;
   $('open-lightroom').disabled = !canMutate();
-  $('session-controls').hidden = showSetup || !session || TERMINAL.has(status) || status === 'awaiting_choice';
-  $('pause-button').hidden = status === 'paused';
+  $('session-controls').hidden = showSetup || !session || sessionEnded(session) || status === 'awaiting_choice';
+  $('pause-button').hidden = status === 'paused' || status === 'error';
   $('pause-button').disabled = !canMutate() || !['preparing', 'running'].includes(status);
   $('pause-button').lastChild.textContent = status === 'pausing' ? 'Pausing…' : 'Pause';
   $('resume-button').hidden = status !== 'paused';
   $('resume-button').disabled = !ready;
+  $('review-recovery').hidden = showSetup || status !== 'error' || session?.retryable !== true;
+  $('retry-review').disabled = !ready || status !== 'error' || session?.retryable !== true;
   $('stop-button').disabled = !canMutate() || status === 'pausing';
   for (const button of $('choice-options').querySelectorAll('button')) button.disabled = !canMutate();
   $('send-answer').disabled = !canMutate() || !$('custom-answer').value.trim();
@@ -233,10 +265,10 @@ function renderSession() {
   document.querySelector('.journal-column').classList.toggle('active', active && connected);
   const statusText = session ? (session.error || (connected ? $('stage-text').textContent : 'Connection lost. Showing the last received session state.')) : 'Waiting for a photograph';
   $('journal-state').textContent = statusText;
-  $('new-session').hidden = !session || !TERMINAL.has(status) || showSetup;
-  $('new-photo').hidden = !session || !TERMINAL.has(status);
+  $('new-session').hidden = !sessionEnded(session) || showSetup;
+  $('new-photo').hidden = !sessionEnded(session);
   $('new-photo').disabled = !canMutate();
-  $('previous-result').hidden = !showSetup || !state.session || !TERMINAL.has(state.session.status);
+  $('previous-result').hidden = !showSetup || !sessionEnded();
   $('previous-result').textContent = state.session?.status === 'error' ? 'View previous session' : 'View previous result';
   $('previous-result').disabled = busy || awaitingSession;
   $('completion-panel').hidden = status !== 'completed';
@@ -261,6 +293,28 @@ function renderSession() {
     $('download-final').title = 'Open the selected review preview.';
   }
   if (session) announce(`${STATUS_LABELS[status] || 'Session updated'}. ${session.stage || session.error || ''}`);
+  renderReviewTiming();
+}
+
+function renderReviewTiming() {
+  const session = visibleSession();
+  const startedAt = Date.parse(session?.inspectionStartedAt);
+  const reviewing = ['running', 'pausing'].includes(session?.status) && Number.isFinite(startedAt);
+  $('review-timing').hidden = !reviewing;
+  if (!reviewing) {
+    if (reviewTimer) window.clearInterval(reviewTimer);
+    reviewTimer = null;
+    return;
+  }
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const note = !connected
+    ? 'Connection lost; review status is unconfirmed.'
+    : seconds >= 60
+      ? 'Still waiting for the visual review. This can take several minutes; no new decision has returned.'
+      : 'Waiting for the visual review to return.';
+  $('review-timing').textContent = `Review elapsed ${elapsed} · ${note}`;
+  if (!reviewTimer) reviewTimer = window.setInterval(renderReviewTiming, 1000);
 }
 
 function renderPreview() {
@@ -293,7 +347,80 @@ function renderPreview() {
     $('main-preview').alt = `${isBefore ? 'Original edit state' : shown?.label || 'Edited version'}${shown?.description ? `. ${shown.description}` : ''}`;
   }
   $('preview-empty').hidden = Boolean(url && !previewError);
+  renderDetails();
   renderFilmstrip();
+}
+
+function renderDetails() {
+  const target = selectedPreviewCandidate();
+  const pairs = comparableDetails(target);
+  if (!pairs.length) inspectionMode = 'overview';
+  const detailed = inspectionMode === 'detail';
+  $('inspection-toggle').hidden = !candidates().length;
+  $('view-detail').disabled = !pairs.length;
+  $('view-detail').title = pairs.length ? 'Compare matching detail regions from saved exports'
+    : 'Matching detail exports are not available for this version';
+  $('view-overview').setAttribute('aria-pressed', String(!detailed));
+  $('view-detail').setAttribute('aria-pressed', String(detailed));
+  $('view-overview').classList.toggle('active', !detailed);
+  $('view-detail').classList.toggle('active', detailed);
+  $('version-toggle').hidden = detailed;
+  $('photo-stage').hidden = detailed;
+  $('detail-controls').hidden = !detailed;
+  $('detail-comparison').hidden = !detailed;
+  if (!detailed) return;
+
+  if (!pairs.some((pair) => pair.after.id === detailRegionId)) detailRegionId = pairs[0].after.id;
+  const signature = JSON.stringify(pairs.map(({ after }) => [after.id, after.label]));
+  if (signature !== detailSignature) {
+    const options = pairs.map(({ after }, index) => {
+      const option = element('option', '', after.label || `Region ${index + 1}`);
+      option.value = after.id;
+      return option;
+    });
+    $('detail-region').replaceChildren(...options);
+    detailSignature = signature;
+  }
+  $('detail-region').value = detailRegionId;
+  const pair = pairs.find(({ after }) => after.id === detailRegionId);
+  const pixels = detailScale === 'pixels';
+  $('detail-fit').setAttribute('aria-pressed', String(!pixels));
+  $('detail-pixels').setAttribute('aria-pressed', String(pixels));
+  $('detail-fit').classList.toggle('active', !pixels);
+  $('detail-pixels').classList.toggle('active', pixels);
+  $('detail-comparison').classList.toggle('export-pixels', pixels);
+  $('detail-after-label').textContent = target?.label || 'SELECTED VERSION';
+  const displayHelp = pixels
+    ? 'Native export pixels. Scroll either pane to inspect the same area in both.'
+    : 'Matching regions shown to fit. Choose Export pixels for closer inspection; choose a saved version below to compare.';
+  $('detail-help').textContent = candidates().length === 1 ? `The original is shown in both panes until an edit is saved. ${displayHelp}` : displayHelp;
+  $('preview-detail').textContent = `${pair.after.label || 'Detail region'} · Crops from Lightroom JPEG exports`;
+  let changed = false;
+  for (const side of ['before', 'after']) {
+    const detail = pair[side];
+    const image = $(`detail-${side}-image`);
+    const url = safePreviewUrl(detail.url);
+    const label = side === 'before' ? 'Original edit state' : (target?.label || 'Selected version');
+    image.alt = `${label}, ${detail.label || 'detail region'}`;
+    image.style.width = pixels ? `${detail.width}px` : '';
+    image.style.height = pixels ? `${detail.height}px` : '';
+    $(`detail-${side}-dimensions`).textContent = `${detail.width} × ${detail.height} crop · ${detail.sourceWidth} × ${detail.sourceHeight} export`;
+    if (image.dataset.previewUrl !== url) {
+      changed = true;
+      image.dataset.previewUrl = url;
+      image.hidden = true;
+      const status = $(`detail-${side}-status`);
+      status.textContent = `Loading ${side === 'before' ? 'original' : 'selected'} detail…`;
+      status.hidden = false;
+      image.src = url;
+    }
+  }
+  if (changed) resetDetailScroll();
+}
+
+function resetDetailScroll() {
+  $('detail-before-viewport').scrollTo(0, 0);
+  $('detail-after-viewport').scrollTo(0, 0);
 }
 
 function renderFilmstrip() {
@@ -325,6 +452,7 @@ function renderFilmstrip() {
         followCurrent = false;
         displayedCandidateId = candidate.id;
         viewMode = index === 0 ? 'before' : 'after';
+        if (index === 0) inspectionMode = 'overview';
         renderPreview();
       });
       fragment.append(button);
@@ -454,15 +582,20 @@ function applyState(next) {
     displayedCandidateId = null;
     followCurrent = true;
     viewMode = 'after';
+    inspectionMode = 'overview';
+    detailRegionId = null;
+    detailScale = 'fit';
+    detailSignature = '';
     // A completed session is history, not the default start screen. An active
     // session always wins over a saved request to show the uploader.
     const view = new URL(location.href).searchParams.get('view');
-    showSetup = !state.session || (TERMINAL.has(state.session.status)
+    showSetup = !state.session || (sessionEnded()
       && (view === 'new' || (state.session.status === 'completed' && view !== 'last')));
     choiceIdentity = '';
     filmstripSignature = '';
     journalSignature = '';
   }
+  if (state.session && !sessionEnded()) showSetup = false;
   receivedState = true;
   renderConnection();
   renderSession();
@@ -626,6 +759,9 @@ window.addEventListener('drop', (event) => event.preventDefault());
 $('start-button').addEventListener('click', beginSession);
 $('pause-button').addEventListener('click', () => sessionAction('pause'));
 $('resume-button').addEventListener('click', () => sessionAction('resume'));
+$('retry-review').addEventListener('click', () => {
+  if (state.session?.status === 'error' && state.session.retryable === true && !$('retry-review').disabled) sessionAction('retry');
+});
 $('stop-button').addEventListener('click', () => sessionAction('stop'));
 $('custom-answer').addEventListener('input', renderControls);
 $('send-answer').addEventListener('click', () => {
@@ -640,6 +776,49 @@ $('custom-answer').addEventListener('keydown', (event) => {
   }
 });
 $('view-before').addEventListener('click', () => { viewMode = 'before'; renderPreview(); });
+$('view-overview').addEventListener('click', () => { inspectionMode = 'overview'; renderPreview(); });
+$('view-detail').addEventListener('click', () => {
+  if ($('view-detail').disabled) return;
+  inspectionMode = 'detail';
+  viewMode = 'after';
+  renderPreview();
+});
+$('detail-region').addEventListener('change', () => {
+  detailRegionId = $('detail-region').value;
+  renderPreview();
+});
+for (const scale of ['fit', 'pixels']) $(`detail-${scale}`).addEventListener('click', () => {
+  detailScale = scale;
+  renderPreview();
+  resetDetailScroll();
+});
+for (const side of ['before', 'after']) {
+  const image = $(`detail-${side}-image`);
+  const viewport = $(`detail-${side}-viewport`);
+  image.addEventListener('load', () => {
+    image.hidden = false;
+    $(`detail-${side}-status`).hidden = true;
+    const otherSide = side === 'before' ? 'after' : 'before';
+    if (detailScale === 'pixels' && !$(`detail-${otherSide}-image`).hidden) {
+      const other = $(`detail-${otherSide}-viewport`);
+      viewport.scrollTo(other.scrollLeft, other.scrollTop);
+    }
+  });
+  image.addEventListener('error', () => {
+    image.hidden = true;
+    const status = $(`detail-${side}-status`);
+    status.textContent = 'This detail could not be loaded. Try the overview or inspect this version in Lightroom.';
+    status.hidden = false;
+  });
+  viewport.addEventListener('scroll', () => {
+    const otherSide = side === 'before' ? 'after' : 'before';
+    if (inspectionMode !== 'detail' || detailScale !== 'pixels' || image.hidden || $(`detail-${otherSide}-image`).hidden) return;
+    const other = $(`detail-${otherSide}-viewport`);
+    if (other.scrollLeft !== viewport.scrollLeft || other.scrollTop !== viewport.scrollTop) {
+      other.scrollTo(viewport.scrollLeft, viewport.scrollTop);
+    }
+  }, { passive: true });
+}
 $('review-choice').addEventListener('click', () => {
   $('choice-panel').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
   $('choice-heading').focus({ preventScroll: true });
@@ -670,7 +849,7 @@ function renderWorkspace() {
 }
 
 function newPhoto() {
-  if (!state.session || !TERMINAL.has(state.session.status) || busy || awaitingSession) return;
+  if (!sessionEnded() || busy || awaitingSession) return;
   showSetup = true;
   selectedFile = null;
   $('raw-file').value = '';
@@ -682,6 +861,8 @@ function newPhoto() {
   displayedCandidateId = null;
   followCurrent = true;
   viewMode = 'after';
+  inspectionMode = 'overview';
+  detailRegionId = null;
   selectSource('upload');
   const url = new URL(location.href);
   url.searchParams.set('view', 'new');
@@ -694,7 +875,7 @@ function newPhoto() {
 $('new-session').addEventListener('click', newPhoto);
 $('new-photo').addEventListener('click', newPhoto);
 $('previous-result').addEventListener('click', () => {
-  if (!state.session || !TERMINAL.has(state.session.status) || busy || awaitingSession) return;
+  if (!sessionEnded() || busy || awaitingSession) return;
   showSetup = false;
   const url = new URL(location.href);
   url.searchParams.set('view', 'last');
@@ -720,6 +901,8 @@ window.addEventListener('pagehide', () => {
   eventStream?.close();
   if (pollTimer) window.clearInterval(pollTimer);
   pollTimer = null;
+  if (reviewTimer) window.clearInterval(reviewTimer);
+  reviewTimer = null;
 });
 window.addEventListener('pageshow', (event) => {
   if (event.persisted) { readState(); connectEvents(); }

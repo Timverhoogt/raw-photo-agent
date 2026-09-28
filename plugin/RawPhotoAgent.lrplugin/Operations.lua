@@ -25,6 +25,9 @@ return function(U, config)
     -- Controller names/units differ from getDevelopSettings/XMP field names.
     -- Read native ranges and values instead of assuming a normalized scale.
     local localSettings = { local_Exposure = 'LocalExposure2012', local_Texture = 'LocalTexture' }
+    local autoToneSettings = { Exposure2012 = true, Contrast2012 = true, Highlights2012 = true,
+        Shadows2012 = true, Whites2012 = true, Blacks2012 = true, Vibrance = true, Saturation = true,
+        AutoToneDigest = true, AutoToneDigestNoSat = true }
     local importExtensions = U.array({ '3fr', 'arw', 'cr2', 'cr3', 'crw', 'dcr', 'dng', 'erf',
         'fff', 'iiq', 'kdc', 'mef', 'mos', 'mrw', 'nef', 'nrw', 'orf', 'pef', 'ptx', 'raf', 'raw',
         'rw2', 'rwl', 'sr2', 'srf', 'srw' })
@@ -137,12 +140,48 @@ return function(U, config)
         return U.hash(copy)
     end
 
-    local function selectExistingMask(params, request)
+    local function excludingSettings(settings, keys)
+        local copy = U.json.decode(U.encode(settings))
+        for key in pairs(keys) do copy[key] = nil end
+        return U.hash(copy)
+    end
+
+    local function maskCreationAvailable()
+        return type(LrDevelopController.createNewMask) == 'function'
+            and type(LrDevelopController.selectTool) == 'function'
+            and type(LrDevelopController.getSelectedMask) == 'function'
+            and type(LrDevelopController.getSelectedMaskTool) == 'function'
+    end
+
+    local function openMasking(catalog, photo, before, request)
+        U.checkDeadline(request)
+        if LrDevelopController.getSelectedTool() ~= 'masking' then
+            if type(LrDevelopController.selectTool) ~= 'function' then
+                U.fail('UNSUPPORTED', 'Native mask panel selection is unavailable.')
+            end
+            target(before.photoId, true, true)
+            expected(catalog, photo, before.stateToken)
+            request._mutationStarted = true -- UI selection can itself complete after a timeout.
+            LrDevelopController.selectTool('masking')
+        end
+        local openUntil = math.min(request.deadlineAt, U.now() + 3000)
+        repeat
+            U.checkDeadline(request)
+            target(before.photoId, true, true)
+            expected(catalog, photo, before.stateToken)
+            if LrDevelopController.getSelectedTool() == 'masking' then return end
+            if U.now() >= openUntil then U.fail('MASKING_REQUIRED', 'Lightroom did not open Masking; no mask edit was applied.') end
+            LrTasks.sleep(0.1)
+        until false
+    end
+
+    local function selectExistingMask(params, request, openPanel)
         local id = U.text(params.maskId, 'maskId')
         local catalog, photo = target(params.photoId, true, true)
         local before = expected(catalog, photo, params.expectedStateToken)
         correction(before.settings, id)
         U.checkDeadline(request)
+        if openPanel then openMasking(catalog, photo, before, request) end
         if LrDevelopController.getSelectedTool() ~= 'masking' then
             U.fail('MASKING_REQUIRED', 'Open the Masking panel before selecting an existing mask.')
         end
@@ -150,10 +189,13 @@ return function(U, config)
             target(params.photoId, true, true)
             expected(catalog, photo, before.stateToken)
             -- Changes only the local tool selection, never the selected photo.
+            U.checkDeadline(request)
+            request._mutationStarted = true
             LrDevelopController.selectMask(id)
         end
         local untilTime = math.min(request.deadlineAt, U.now() + 3000)
         repeat
+            U.checkDeadline(request)
             target(params.photoId, true, true)
             expected(catalog, photo, before.stateToken)
             if LrDevelopController.getSelectedTool() ~= 'masking' then
@@ -269,20 +311,29 @@ return function(U, config)
             bridgeDir = config.bridgeDir, exportRoot = config.exportRoot, importRoot = config.importRoot,
             operations = { capabilities = true, selected = true, create_working_copy = true,
                 read_state = true, checkpoint = true, apply = true, restore = true, render = true,
-                selected_mask = true, select_mask = true, create_subject_mask = false, adjust_mask = true,
+                selected_mask = true, select_mask = true, create_subject_mask = maskCreationAvailable(),
+                create_background_mask = maskCreationAvailable(), adjust_mask = true,
+                auto_tone = type(LrDevelopController.setAutoTone) == 'function',
                 import_photo = true, reveal_photo = true },
             importExtensions = importExtensions, importPathLayout = 'importRoot/UUID/safe-filename.ext',
             numericAdjustments = numericRanges, stringAdjustments = { WhiteBalance = U.array({ 'Custom' }) },
             localAdjustments = { local_Exposure = 'dynamic: selected_mask.parameters.local_Exposure',
                 local_Texture = 'dynamic: selected_mask.parameters.local_Texture' },
             liveValidated = false,
+            maskCreation = { implemented = true, runtimeAvailable = maskCreationAvailable(),
+                liveValidated = false, completion = 'stored-and-selected',
+                pixelCoverageVerified = false, rollbackVerified = false },
+            renderFormats = { JPEG = { extension = 'jpg', bitDepth = 8, lossless = false },
+                TIFF = { extension = 'tif', bitDepth = 16, lossless = true } },
             restrictions = U.array({
                 'Exactly one selected matching photo is required for target operations.',
                 'Uploaded RAW import is restricted to importRoot; it adds or finds an original, selects it, and enters Develop without applying edits.',
                 'The upload server must reject Unix symlinks; the SDK additionally rejects paths redirected by its alias resolver.',
                 'Photo mutations require a virtual copy; global editing requires RAW or DNG.',
                 'Native snapshot restore requires Develop and a checkpoint created by this bridge.',
-                'Mask creation and Denoise are not enabled; existing-mask exposure/texture require Develop with Masking open.',
+                'Mask creation observes new stored group/component identities; rendered mask coverage and restoration require separate validation.',
+                'Existing-mask exposure/texture require Develop with Masking open. Denoise is not enabled.',
+                'Auto tone requires a virtual RAW/DNG in Develop; unrelated settings must remain identical.',
                 'Mask values use native DevelopController units; inspect selected_mask before adjusting.',
                 'State tokens cover SDK settings, not every opaque AI dependency.',
                 'Native restoration verifies settings; the caller must also compare rendered pixels.',
@@ -376,7 +427,7 @@ return function(U, config)
 
     function O.select_mask(params, request)
         U.keys(params, { photoId = true, expectedStateToken = true, maskId = true })
-        local _, _, current, context = selectExistingMask(params, request)
+        local _, _, current, context = selectExistingMask(params, request, true)
         return { state = current, maskContext = context }
     end
 
@@ -527,16 +578,23 @@ return function(U, config)
     end
 
     function O.render(params, request)
-        U.keys(params, { photoId = true, expectedStateToken = true, outputPath = true, maxEdge = true })
+        U.keys(params, { photoId = true, expectedStateToken = true, outputPath = true, maxEdge = true, format = true })
         local catalog, photo = target(params.photoId, false, false)
         available(photo)
         local before = expected(catalog, photo, params.expectedStateToken)
+        local format = params.format or 'JPEG'
+        if format ~= 'JPEG' and format ~= 'TIFF' then U.fail('INVALID_PARAMS', 'format must be JPEG or TIFF.') end
+        local extension = format == 'TIFF' and 'tif' or 'jpg'
         local output = U.text(params.outputPath, 'outputPath', 2048)
         local basename = output:sub(#config.exportRoot + 2)
         if output:sub(1, #config.exportRoot + 1) ~= config.exportRoot .. '/'
-            or not basename:match('^[A-Za-z0-9][A-Za-z0-9._-]*%.jpg$')
+            or not basename:match('^[A-Za-z0-9][A-Za-z0-9._-]*%.' .. extension .. '$')
             or basename:find('..', 1, true) then
-            U.fail('INVALID_OUTPUT_PATH', 'outputPath must be a safe .jpg filename directly within exportRoot.')
+            U.fail('INVALID_OUTPUT_PATH', 'outputPath must be a safe .' .. extension .. ' filename directly within exportRoot.')
+        end
+        if LrFileUtils.resolveAllAliases(config.exportRoot) ~= config.exportRoot
+            or LrFileUtils.resolveAllAliases(output) ~= output then
+            U.fail('INVALID_OUTPUT_PATH', 'Aliases or redirected export paths are not permitted.')
         end
         if LrFileUtils.exists(output) then U.fail('FILE_EXISTS', 'Render output already exists; use a unique filename.') end
         local edge = params.maxEdge or 2048
@@ -557,7 +615,8 @@ return function(U, config)
                 LR_collisionHandling = 'skip', LR_reimportExportedPhoto = false,
                 LR_renamingTokensOn = true, LR_tokens = '{{custom_token}}',
                 LR_tokenCustomString = request.id, LR_extensionCase = 'lowercase',
-                LR_format = 'JPEG', LR_jpeg_quality = 0.9, LR_jpeg_useLimitSize = false,
+                LR_format = format, LR_jpeg_quality = 0.9, LR_jpeg_useLimitSize = false,
+                LR_tiff_bitDepth = 16, LR_tiff_compressionMethod = 'compressionMethod_None',
                 LR_export_colorSpace = 'sRGB',
                 LR_size_doConstrain = true, LR_size_doNotEnlarge = true,
                 LR_size_resizeType = 'longEdge', LR_size_maxHeight = edge, LR_size_maxWidth = edge,
@@ -586,11 +645,152 @@ return function(U, config)
         local ok, reason = LrFileUtils.move(renderedPath, output)
         if not ok then U.fail('IO_ERROR', 'Cannot publish completed render: ' .. tostring(reason)) end
         return { outputPath = output, photoId = params.photoId, stateToken = before.stateToken,
-            maxEdge = edge, colorSpace = 'sRGB', format = 'JPEG', bytes = attrs.fileSize }
+            maxEdge = edge, colorSpace = 'sRGB', format = format,
+            bitDepth = format == 'TIFF' and 16 or 8, outputSharpening = false, bytes = attrs.fileSize }
     end
 
-    function O.create_subject_mask()
-        U.fail('UNSUPPORTED', 'Subject-mask completion and rollback are not yet live-validated; no mask was created.')
+    local function createMask(params, request, kind)
+        U.keys(params, { photoId = true, expectedStateToken = true })
+        if not maskCreationAvailable() then U.fail('UNSUPPORTED', 'Required native mask APIs are unavailable.') end
+        local catalog, photo = target(params.photoId, true, true)
+        rawOnly(photo)
+        available(photo)
+        local before = expected(catalog, photo, params.expectedStateToken)
+        local existing, existingCount = {}, 0
+        for _, group in ipairs(before.settings.MaskGroupBasedCorrections or {}) do
+            if type(group.CorrectionID) ~= 'string' or group.CorrectionID == '' or existing[group.CorrectionID] then
+                U.fail('STATE_UNAVAILABLE', 'Existing mask groups have missing or duplicate identities.')
+            end
+            existing[group.CorrectionID], existingCount = U.hash(group), existingCount + 1
+        end
+        local ignored = { MaskGroupBasedCorrections = true }
+        -- Creating the first mask can introduce/enable the mask collection. An
+        -- existing disabled collection must not silently be enabled as a side effect.
+        if existingCount == 0 then ignored.EnableMaskGroupBasedCorrections = true end
+        local protectedHash = excludingSettings(before.settings, ignored)
+        openMasking(catalog, photo, before, request)
+        U.checkDeadline(request)
+        target(params.photoId, true, true)
+        expected(catalog, photo, before.stateToken)
+        request._mutationStarted = true
+        LrDevelopController.createNewMask('aiSelection', kind)
+        local untilTime = math.min(request.deadlineAt, U.now() + 30000)
+        local stableToken, stableSince
+        repeat
+            U.checkDeadline(request)
+            target(params.photoId, true, true)
+            local after = state(catalog, photo)
+            if excludingSettings(after.settings, ignored) ~= protectedHash then
+                U.fail('VERIFY_FAILED', 'A setting outside the new mask changed; inspect state before recovery.')
+            end
+            local added, seen = nil, {}
+            for _, group in ipairs(after.settings.MaskGroupBasedCorrections or {}) do
+                local groupId = group.CorrectionID
+                if type(groupId) ~= 'string' or groupId == '' or seen[groupId] then
+                    U.fail('VERIFY_FAILED', 'Mask creation produced missing or duplicate group identities.')
+                end
+                seen[groupId] = true
+                if existing[groupId] then
+                    if U.hash(group) ~= existing[groupId] then
+                        U.fail('VERIFY_FAILED', 'An existing mask changed while creating the new mask.')
+                    end
+                elseif added then
+                    U.fail('VERIFY_FAILED', 'More than one new mask appeared; inspect state before recovery.')
+                else
+                    added = group
+                end
+            end
+            for groupId in pairs(existing) do
+                if not seen[groupId] then U.fail('VERIFY_FAILED', 'An existing mask disappeared during creation.') end
+            end
+            if LrDevelopController.getSelectedTool() ~= 'masking' then
+                U.fail('MASK_TARGET_CHANGED', 'Masking closed during mask creation; inspect Lightroom before recovery.')
+            end
+            local selectedId, componentId = LrDevelopController.getSelectedMask(), LrDevelopController.getSelectedMaskTool()
+            local componentFound = false
+            if added and selectedId == added.CorrectionID and type(componentId) == 'string' and componentId ~= '' then
+                for _, component in ipairs(added.CorrectionMasks or {}) do
+                    if component.MaskID == componentId then componentFound = true end
+                end
+            end
+            if componentFound then
+                -- SDK exposes no documented AI-completion callback. Require
+                -- saved group/component identity plus a stable readback window,
+                -- then let the caller validate rendered coverage and rollback.
+                if stableToken ~= after.stateToken then stableToken, stableSince = after.stateToken, U.now() end
+                if U.now() - stableSince >= 300 then
+                    local context = maskContext(added.CorrectionID, after.settings)
+                    target(params.photoId, true, true)
+                    expected(catalog, photo, after.stateToken)
+                    U.checkDeadline(request)
+                    if LrDevelopController.getSelectedTool() ~= 'masking'
+                        or LrDevelopController.getSelectedMask() ~= added.CorrectionID
+                        or LrDevelopController.getSelectedMaskTool() ~= componentId then
+                        U.fail('MASK_TARGET_CHANGED', 'Mask selection changed while verifying its controls.')
+                    end
+                    return { state = after, maskId = added.CorrectionID, maskKind = kind,
+                        maskContext = context, completion = 'stored-and-selected',
+                        pixelCoverageVerified = false, renderComparisonRequired = true }
+                end
+            else
+                stableToken, stableSince = nil, nil
+            end
+            if U.now() >= untilTime then break end
+            LrTasks.sleep(0.1)
+        until false
+        U.fail('MASK_CREATION_UNVERIFIED', 'A new stored and selected mask/component did not verify; inspect read_state before recovery. No retry was attempted.')
+    end
+
+    function O.create_subject_mask(params, request) return createMask(params, request, 'subject') end
+    function O.create_background_mask(params, request) return createMask(params, request, 'background') end
+
+    function O.auto_tone(params, request)
+        U.keys(params, { photoId = true, expectedStateToken = true })
+        if type(LrDevelopController.setAutoTone) ~= 'function' then U.fail('UNSUPPORTED', 'Native Auto Tone is unavailable.') end
+        local catalog, photo = target(params.photoId, true, true)
+        rawOnly(photo)
+        available(photo)
+        local before = expected(catalog, photo, params.expectedStateToken)
+        for key in pairs(autoToneSettings) do
+            if numericRanges[key] and not U.finite(before.settings[key]) then
+                U.fail('UNSUPPORTED_PARAMETER', 'Auto Tone requires modern numeric tone settings: ' .. key)
+            end
+        end
+        local protectedHash = excludingSettings(before.settings, autoToneSettings)
+        U.checkDeadline(request)
+        target(params.photoId, true, true)
+        expected(catalog, photo, before.stateToken)
+        request._mutationStarted = true
+        LrDevelopController.setAutoTone()
+        local untilTime = math.min(request.deadlineAt, U.now() + 10000)
+        local stableToken, stableSince
+        repeat
+            U.checkDeadline(request)
+            target(params.photoId, true, true)
+            local after = state(catalog, photo)
+            if excludingSettings(after.settings, autoToneSettings) ~= protectedHash then
+                U.fail('VERIFY_FAILED', 'Auto Tone changed a setting outside its allowed tone controls; inspect state before recovery.')
+            end
+            if after.stateToken ~= before.stateToken then
+                if stableToken ~= after.stateToken then stableToken, stableSince = after.stateToken, U.now() end
+                if U.now() - stableSince >= 300 then
+                    local changed = {}
+                    for key in pairs(autoToneSettings) do
+                        local value = after.settings[key]
+                        if numericRanges[key] and not U.finite(value) then
+                            U.fail('VERIFY_FAILED', 'Auto Tone returned a nonnumeric tone control: ' .. key)
+                        end
+                        if value ~= before.settings[key] then changed[key] = value end
+                    end
+                    return { state = after, changedSettings = changed, renderComparisonRequired = true }
+                end
+            else
+                stableToken, stableSince = nil, nil
+            end
+            if U.now() >= untilTime then break end
+            LrTasks.sleep(0.1)
+        until false
+        U.fail('AUTO_TONE_UNVERIFIED', 'Auto Tone was invoked but no stable changed tone state was observed; inspect Lightroom before recovery.')
     end
 
     function O.adjust_mask(params, request)

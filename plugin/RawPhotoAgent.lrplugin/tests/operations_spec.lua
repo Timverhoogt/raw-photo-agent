@@ -6,6 +6,10 @@ _PLUGIN = _PLUGIN or { path = 'plugin/RawPhotoAgent.lrplugin' }
 local now, selected, files, records, moduleName = 100000, {}, {}, {}, 'develop'
 local mutations, exports, lastRestored, changeDuringRender = 0, 0, nil, false
 local selectedTool, selectedMask, maskSelections = 'masking', nil, 0
+local selectedMaskTool, maskCreations, toolSelections = 'component-1', 0, 0
+local maskCreationMode, failToolSelection, corruptToolSelection = 'success', false, false
+local autoToneMode, autoToneCalls, lastExportSettings = 'success', 0, nil
+local pendingMask, maskReadyAt
 local failMaskSelection, corruptGlobalOnMaskSet, ignoreMaskSet = false, false, false
 local importedPhotos, aliases = {}, {}
 local imports, photoSelections, moduleSwitches, writeDepth = 0, 0, 0, 0
@@ -50,6 +54,26 @@ local function photo(id, virtual, path, format)
 end
 
 local original = photo(1, false)
+local function createNativeMask()
+    local p = selected[1]
+    if maskCreationMode == 'none' then return end
+    local id = 'created-mask-' .. tostring(maskCreations)
+    local component = 'created-component-' .. tostring(maskCreations)
+    local group = { CorrectionID = id, LocalExposure2012 = 0, LocalTexture = 0,
+        CorrectionMasks = { { MaskID = component, MaskDigest = 'opaque-generated' } } }
+    if maskCreationMode == 'empty' then group.CorrectionMasks = {} end
+    if maskCreationMode == 'global' then p.settings.Exposure2012 = p.settings.Exposure2012 + 1 end
+    p.settings.MaskGroupBasedCorrections = p.settings.MaskGroupBasedCorrections or {}
+    if maskCreationMode == 'existing' then p.settings.MaskGroupBasedCorrections[1].LocalTexture = 0.7 end
+    table.insert(p.settings.MaskGroupBasedCorrections, group)
+    if maskCreationMode == 'two' then
+        table.insert(p.settings.MaskGroupBasedCorrections, { CorrectionID = 'unexpected', LocalExposure2012 = 0 })
+    end
+    if maskCreationMode ~= 'unselected' then selectedMask = id end
+    selectedMaskTool = maskCreationMode == 'mismatch' and 'wrong-component' or component
+    p.settings.EnableMaskGroupBasedCorrections = true
+    if maskCreationMode == 'switch' then selected = { original } end
+end
 local catalog = {}
 function catalog:getPath() return '/catalog/test.lrcat' end
 function catalog:getTargetPhoto() return selected[1] end
@@ -95,7 +119,30 @@ local mocks = {
     LrDevelopController = {
         getSelectedTool = function() return selectedTool end,
         getSelectedMask = function() return selectedMask end,
-        getSelectedMaskTool = function() return 'component-1' end,
+        getSelectedMaskTool = function() return selectedMaskTool end,
+        selectTool = function(tool)
+            assert(writeDepth == 0 and tool == 'masking')
+            toolSelections = toolSelections + 1
+            if not failToolSelection then selectedTool = tool end
+            if corruptToolSelection then selected[1].settings.Exposure2012 = selected[1].settings.Exposure2012 + 1 end
+        end,
+        createNewMask = function(maskType, kind)
+            assert(writeDepth == 0 and selectedTool == 'masking' and maskType == 'aiSelection')
+            assert(kind == 'subject' or kind == 'background')
+            maskCreations, mutations = maskCreations + 1, mutations + 1
+            if maskCreationMode == 'delay' then pendingMask, maskReadyAt = createNativeMask, now + 600
+            else createNativeMask() end
+        end,
+        setAutoTone = function()
+            assert(writeDepth == 0 and moduleName == 'develop')
+            autoToneCalls, mutations = autoToneCalls + 1, mutations + 1
+            if autoToneMode == 'none' then return end
+            selected[1].settings.Exposure2012 = selected[1].settings.Exposure2012 + 0.3
+            selected[1].settings.Highlights2012 = -20
+            selected[1].settings.AutoToneDigest = 'native-auto-digest'
+            if autoToneMode == 'global' then selected[1].settings.Temperature = 4000 end
+            if autoToneMode == 'switch' then selected = { original } end
+        end,
         selectMask = function(id)
             maskSelections = maskSelections + 1
             if not failMaskSelection then selectedMask = id end
@@ -129,7 +176,10 @@ local mocks = {
     end },
     LrPathUtils = { child = function(a, b) return a .. '/' .. b end,
         isAbsolute = function(path) return path:sub(1, 1) == '/' end },
-    LrTasks = { sleep = function(seconds) now = now + seconds * 1000 end },
+    LrTasks = { sleep = function(seconds)
+        now = now + seconds * 1000
+        if pendingMask and now >= maskReadyAt then local callback = pendingMask; pendingMask = nil; callback() end
+    end },
     LrFileUtils = {
         createAllDirectories = function() return true end,
         exists = function(path) return files[path] == 'directory' and 'directory' or files[path] and 'file' or false end,
@@ -144,7 +194,8 @@ local mocks = {
     LrExportSession = function(params)
         exports = exports + 1
         local settings = params.exportSettings
-        assert(settings.LR_format == 'JPEG' and settings.LR_export_colorSpace == 'sRGB')
+        lastExportSettings = clone(settings)
+        assert((settings.LR_format == 'JPEG' or settings.LR_format == 'TIFF') and settings.LR_export_colorSpace == 'sRGB')
         assert(settings.LR_jpeg_quality == 0.9 and settings.LR_outputSharpeningOn == false)
         assert(settings.LR_size_maxHeight == 2048 and settings.LR_size_doNotEnlarge == true)
         return { renditions = function()
@@ -153,7 +204,7 @@ local mocks = {
                 if yielded then return nil end
                 yielded = true
                 return 1, { waitForRender = function()
-                    local output = settings.LR_export_destinationPathPrefix .. '/render.jpg'
+                    local output = settings.LR_export_destinationPathPrefix .. (settings.LR_format == 'TIFF' and '/render.tif' or '/render.jpg')
                     files[output] = true
                     if changeDuringRender then selected[1].settings.Exposure2012 = 2 end
                     return true, output
@@ -184,7 +235,9 @@ check(U.encode(U.array()) == '[]', 'empty array stays array')
 check(U.encode({}) == '{}', 'empty object stays object')
 check(U.hash({ b = 2, a = 1 }) == U.hash({ a = 1, b = 2 }), 'tokens use sorted keys')
 check(O.selected({}).count == 0, 'no selection never means the filmstrip')
-check(O.capabilities({}).operations.create_subject_mask == false, 'mask capability explicitly unavailable')
+check(O.capabilities({}).operations.create_subject_mask == true
+    and O.capabilities({}).maskCreation.liveValidated == false,
+    'implemented runtime capability is separate from live validation')
 selected = { original }
 local originalId = O.selected({}).photoId
 local baseline = O.read_state({ photoId = originalId })
@@ -216,6 +269,27 @@ check(editRequest._mutationStarted and copy.settings.Exposure2012 == 0.5, 'apply
 local render = O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
     outputPath = '/renders/candidate.jpg' }, request())
 check(files[render.outputPath] and render.stateToken == edited.state.stateToken, 'render carries exact revision')
+check(render.format == 'JPEG' and render.bitDepth == 8 and render.outputSharpening == false,
+    'default render remains JPEG with explicit depth/sharpening metadata')
+local tiff = O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
+    outputPath = '/renders/reference.tif', format = 'TIFF' }, request())
+check(tiff.format == 'TIFF' and tiff.bitDepth == 16 and files[tiff.outputPath]
+    and lastExportSettings.LR_tiff_bitDepth == 16
+    and lastExportSettings.LR_tiff_compressionMethod == 'compressionMethod_None'
+    and lastExportSettings.LR_outputSharpeningOn == false and lastExportSettings.LR_export_colorSpace == 'sRGB',
+    'reference TIFF uses 16-bit lossless sRGB with no output sharpening')
+for _, spec in ipairs({ { format = 'PNG', path = '/renders/reference.png', code = 'INVALID_PARAMS' },
+    { format = 'TIFF', path = '/renders/reference.jpg', code = 'INVALID_OUTPUT_PATH' },
+    { format = 'JPEG', path = '/renders/reference.tif', code = 'INVALID_OUTPUT_PATH' },
+    { format = 'TIFF', path = '/renders/nested/reference.tif', code = 'INVALID_OUTPUT_PATH' },
+    { format = 'TIFF', path = '/renders/../reference.tif', code = 'INVALID_OUTPUT_PATH' } }) do
+    rejects(spec.code, function() O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
+        outputPath = spec.path, format = spec.format }, request()) end)
+end
+aliases['/renders'] = '/elsewhere'
+rejects('INVALID_OUTPUT_PATH', function() O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
+    outputPath = '/renders/alias.tif', format = 'TIFF' }, request()) end)
+aliases['/renders'] = nil
 rejects('FILE_EXISTS', function() O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
     outputPath = '/renders/candidate.jpg' }, request()) end)
 rejects('INVALID_OUTPUT_PATH', function() O.render({ photoId = id, expectedStateToken = edited.state.stateToken,
@@ -240,7 +314,12 @@ changeDuringRender = true
 rejects('STALE_STATE', function() O.render({ photoId = id, expectedStateToken = restored.state.stateToken,
     outputPath = '/renders/stale.jpg' }, request()) end)
 check(not files['/renders/stale.jpg'], 'changed state cannot publish a stale render')
-rejects('UNSUPPORTED', function() O.create_subject_mask({ photoId = id }, request()) end)
+copy.settings.Exposure2012 = 0
+local currentState = O.read_state({ photoId = id })
+rejects('STALE_STATE', function() O.render({ photoId = id, expectedStateToken = currentState.stateToken,
+    outputPath = '/renders/stale-reference.tif', format = 'TIFF' }, request()) end)
+check(not files['/renders/stale-reference.tif'], 'TIFF rejects state changes during rendering')
+changeDuringRender = false
 copy.settings.MaskGroupBasedCorrections = {
     { CorrectionID = 'mask-1', LocalExposure2012 = 0.25, LocalTexture = 0,
         CorrectionMasks = { { MaskID = 'component-1', MaskDigest = 'opaque' } } },
@@ -259,11 +338,27 @@ rejects('MASK_NOT_FOUND', function() O.select_mask(selectParams, request()) end)
 check(maskSelections == 0, 'wrong-photo and missing-mask cannot change selection')
 selectParams.maskId = 'mask-1'
 failMaskSelection = true
-rejects('MASK_TARGET_CHANGED', function() O.select_mask(selectParams, request()) end)
+local failedMaskSelectionRequest = request()
+rejects('MASK_TARGET_CHANGED', function() O.select_mask(selectParams, failedMaskSelectionRequest) end)
+check(failedMaskSelectionRequest._mutationStarted, 'native mask selection records uncertain UI boundary')
 failMaskSelection = false
 local selectionResult = O.select_mask(selectParams, request())
 check(selectedMask == 'mask-1' and selectionResult.state.stateToken == maskState.stateToken,
     'existing mask selection is verified and leaves settings unchanged')
+selectedTool = 'loupe'
+local selectOpenRequest = request()
+local panelSelected = O.select_mask(selectParams, selectOpenRequest)
+check(selectedTool == 'masking' and selectOpenRequest._mutationStarted
+    and panelSelected.state.stateToken == maskState.stateToken,
+    'explicit select_mask opens Masking with target/state checks and preserves photo settings')
+selectedTool, failToolSelection = 'loupe', true
+local maskSelectionsBeforeOpen = maskSelections
+rejects('MASKING_REQUIRED', function() O.select_mask(selectParams, request()) end)
+check(maskSelections == maskSelectionsBeforeOpen, 'failed panel opening cannot select a mask')
+failToolSelection, corruptToolSelection = false, true
+local savedSelectionExposure = copy.settings.Exposure2012
+rejects('STALE_STATE', function() O.select_mask(selectParams, request()) end)
+copy.settings.Exposure2012, corruptToolSelection, selectedTool = savedSelectionExposure, false, 'masking'
 local inspection = O.selected_mask({ photoId = id, maskId = 'mask-1' })
 check(inspection.maskContext.parameters.local_Exposure.value == 1
     and inspection.maskContext.parameters.local_Exposure.min == -4
@@ -301,6 +396,125 @@ rejects('VERIFY_FAILED', function() O.adjust_mask(maskParams({ local_Exposure = 
 check(failedRequest._mutationStarted, 'unverified native set is marked potentially applied')
 ignoreMaskSet, corruptGlobalOnMaskSet = false, true
 rejects('VERIFY_FAILED', function() O.adjust_mask(maskParams({ local_Exposure = 0.5 }), request()) end)
+corruptGlobalOnMaskSet = false
+-- New masks must be distinct saved groups/components, preserving all prior work.
+local savedMaskSettings = clone(copy.settings)
+savedMaskSettings.EnableMaskGroupBasedCorrections = true
+local function resetMaskCreation(mode)
+    copy.settings = clone(savedMaskSettings)
+    selected, selectedTool, selectedMask, selectedMaskTool = { copy }, 'masking', 'mask-1', 'component-1'
+    maskCreationMode = mode or 'success'
+    return { photoId = id, expectedStateToken = O.read_state({ photoId = id }).stateToken }
+end
+local function longRequest()
+    local value = request(); value.deadlineAt = now + 40000; return value
+end
+local createParams = resetMaskCreation()
+local beforeMaskCreations, beforeToolSelections = maskCreations, toolSelections
+createParams.expectedStateToken = 'stale'
+rejects('STALE_STATE', function() O.create_subject_mask(createParams, request()) end)
+createParams = resetMaskCreation(); createParams.photoId = 'wrong'
+rejects('TARGET_CHANGED', function() O.create_subject_mask(createParams, request()) end)
+selected = { original }
+rejects('ORIGINAL_PROTECTED', function() O.create_subject_mask({ photoId = originalId,
+    expectedStateToken = baseline.stateToken }, request()) end)
+createParams = resetMaskCreation(); moduleName = 'library'
+rejects('DEVELOP_REQUIRED', function() O.create_subject_mask(createParams, request()) end)
+moduleName = 'develop'
+local expiredMask = request(); expiredMask.deadlineAt = now - 1
+rejects('EXPIRED', function() O.create_subject_mask(createParams, expiredMask) end)
+check(maskCreations == beforeMaskCreations and toolSelections == beforeToolSelections,
+    'new mask invalid targeting/state/module/deadline fails before any native action')
+local nativeCreate = mocks.LrDevelopController.createNewMask
+mocks.LrDevelopController.createNewMask = nil
+check(not O.capabilities({}).operations.create_subject_mask and not O.capabilities({}).operations.create_background_mask,
+    'mask capabilities reflect missing runtime API')
+rejects('UNSUPPORTED', function() O.create_subject_mask(createParams, request()) end)
+mocks.LrDevelopController.createNewMask = nativeCreate
+createParams = resetMaskCreation(); selectedTool, failToolSelection = 'loupe', true
+local failedOpen = request()
+rejects('MASKING_REQUIRED', function() O.create_subject_mask(createParams, failedOpen) end)
+check(failedOpen._mutationStarted and maskCreations == beforeMaskCreations,
+    'failed panel opening is uncertain UI outcome but creates no mask')
+failToolSelection, corruptToolSelection = false, true
+createParams = resetMaskCreation(); selectedTool = 'loupe'
+rejects('STALE_STATE', function() O.create_subject_mask(createParams, request()) end)
+check(maskCreations == beforeMaskCreations, 'state changes during panel opening prevent creation')
+corruptToolSelection = false
+createParams = resetMaskCreation('delay'); selectedTool = 'loupe'
+local createRequest = request()
+local createdMask = O.create_subject_mask(createParams, createRequest)
+check(createRequest._mutationStarted and createdMask.maskKind == 'subject'
+    and createdMask.maskId == selectedMask and createdMask.maskContext.selectedMaskToolId == selectedMaskTool
+    and createdMask.completion == 'stored-and-selected' and createdMask.pixelCoverageVerified == false
+    and createdMask.renderComparisonRequired, 'creation waits for stored and selected native identities without claiming pixel coverage')
+check(U.hash(copy.settings.MaskGroupBasedCorrections[1]) == U.hash(savedMaskSettings.MaskGroupBasedCorrections[1])
+    and U.hash(copy.settings.MaskGroupBasedCorrections[2]) == U.hash(savedMaskSettings.MaskGroupBasedCorrections[2])
+    and copy.settings.Exposure2012 == savedMaskSettings.Exposure2012,
+    'new mask preserves other masks, geometry, and global exposure')
+createParams = resetMaskCreation()
+copy.settings.MaskGroupBasedCorrections, copy.settings.EnableMaskGroupBasedCorrections = nil, nil
+createParams.expectedStateToken = O.read_state({ photoId = id }).stateToken
+local background = O.create_background_mask(createParams, request())
+check(background.maskKind == 'background' and #copy.settings.MaskGroupBasedCorrections == 1
+    and copy.settings.EnableMaskGroupBasedCorrections == true, 'first background mask may introduce the mask collection flag')
+for _, mode in ipairs({ 'none', 'empty', 'unselected', 'mismatch' }) do
+    createParams = resetMaskCreation(mode)
+    local unverified = longRequest()
+    rejects('MASK_CREATION_UNVERIFIED', function() O.create_subject_mask(createParams, unverified) end)
+    check(unverified._mutationStarted, 'no mask/empty mask/unselected component reports uncertain outcome')
+end
+for _, mode in ipairs({ 'global', 'existing', 'two' }) do
+    createParams = resetMaskCreation(mode)
+    rejects('VERIFY_FAILED', function() O.create_subject_mask(createParams, request()) end)
+end
+createParams = resetMaskCreation('switch')
+rejects('TARGET_CHANGED', function() O.create_subject_mask(createParams, request()) end)
+createParams = resetMaskCreation('delay')
+local shortCreate = request(); shortCreate.deadlineAt = now + 200
+rejects('EXPIRED', function() O.create_subject_mask(createParams, shortCreate) end)
+check(shortCreate._mutationStarted, 'deadline after native creation is uncertain and never retried')
+pendingMask = nil
+-- Auto Tone is a separately guarded native comparison baseline.
+local function resetAuto(mode)
+    resetMaskCreation()
+    for _, key in ipairs({ 'Highlights2012', 'Shadows2012', 'Whites2012', 'Blacks2012', 'Vibrance', 'Saturation' }) do
+        copy.settings[key] = 0
+    end
+    autoToneMode = mode or 'success'
+    return { photoId = id, expectedStateToken = O.read_state({ photoId = id }).stateToken }
+end
+local autoParams = resetAuto()
+local beforeAutoCalls = autoToneCalls
+autoParams.expectedStateToken = 'stale'
+rejects('STALE_STATE', function() O.auto_tone(autoParams, request()) end)
+autoParams = resetAuto(); autoParams.photoId = 'wrong'
+rejects('TARGET_CHANGED', function() O.auto_tone(autoParams, request()) end)
+selected = { original }
+rejects('ORIGINAL_PROTECTED', function() O.auto_tone({ photoId = originalId,
+    expectedStateToken = baseline.stateToken }, request()) end)
+autoParams = resetAuto(); copy.settings.Vibrance = nil
+autoParams.expectedStateToken = O.read_state({ photoId = id }).stateToken
+rejects('UNSUPPORTED_PARAMETER', function() O.auto_tone(autoParams, request()) end)
+autoParams = resetAuto(); local expiredAuto = request(); expiredAuto.deadlineAt = now - 1
+rejects('EXPIRED', function() O.auto_tone(autoParams, expiredAuto) end)
+check(autoToneCalls == beforeAutoCalls, 'Auto Tone preconditions prevent any native write')
+autoParams = resetAuto()
+local autoRequest = request()
+local autoResult = O.auto_tone(autoParams, autoRequest)
+check(autoRequest._mutationStarted and autoResult.changedSettings.Exposure2012
+    and autoResult.changedSettings.Highlights2012 == -20 and autoResult.renderComparisonRequired,
+    'Auto Tone returns observed changed settings after stable readback')
+check(U.hash(copy.settings.MaskGroupBasedCorrections) == U.hash(savedMaskSettings.MaskGroupBasedCorrections)
+    and copy.settings.Temperature == savedMaskSettings.Temperature, 'Auto Tone preserves masks and unrelated white balance')
+autoParams = resetAuto('global')
+rejects('VERIFY_FAILED', function() O.auto_tone(autoParams, request()) end)
+autoParams = resetAuto('switch')
+rejects('TARGET_CHANGED', function() O.auto_tone(autoParams, request()) end)
+autoParams = resetAuto('none')
+local noAutoRequest = longRequest()
+rejects('AUTO_TONE_UNVERIFIED', function() O.auto_tone(autoParams, noAutoRequest) end)
+check(noAutoRequest._mutationStarted, 'no-op Auto Tone does not falsely claim confirmed completion')
 -- Uploaded files may enter the catalog only through a dedicated root and UUID directory.
 local uploadDirectory = '/uploads/00000000-0000-4000-8000-000000000001'
 local uploadedPath = uploadDirectory .. '/camera.CR3'

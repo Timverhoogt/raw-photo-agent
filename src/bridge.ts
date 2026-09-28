@@ -10,7 +10,7 @@ const UNCERTAIN_REMOTE_CODES = new Set([
 ]);
 const MUTATING_OPERATIONS = new Set([
   "import_photo", "reveal_photo",
-  "create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "adjust_mask",
+  "create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "create_background_mask", "auto_tone", "adjust_mask",
 ]);
 
 export class BridgeError extends Error {

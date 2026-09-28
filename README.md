@@ -24,7 +24,7 @@ flowchart TD
 
 - **Work on a virtual copy.** Preserve the source photo and its existing edit.
 - **Make deliberate changes.** Each candidate records its parent, settings, native snapshot, and intended improvement.
-- **Inspect the result.** Export a fresh preview and examine full-resolution detail where needed.
+- **Inspect the result.** Compare overview previews and matching detail regions from saved Lightroom exports, up to 8192 pixels on the long edge.
 - **Return to an earlier decision.** Restore a Lightroom snapshot and verify the resulting state.
 - **Let the photographer choose.** Present two or three alternatives and save the actual selection.
 
@@ -87,16 +87,16 @@ For a separate agent-driven CLI session, provide the [editing workflow](EDITING_
 | Area | Available now |
 | --- | --- |
 | Photo targeting | One uploaded or explicitly selected RAW/DNG; guarded native import and edits restricted to a virtual copy |
-| Browser demo | Codex visual decisions, public progress notes, pause/finish, questions, final comparison, and JPEG download |
+| Browser demo | Codex visual decisions, elapsed review time, safe review retry, pause/finish, questions, final comparison, and JPEG download |
 | Global adjustments | Tone, white balance, presence, color intensity, sharpening, conventional noise reduction |
 | Existing masks via manual CLI | Explicit mask selection, local exposure, and local texture; excluded from the autonomous demo |
 | History | Native snapshots, candidate ancestry, state checks, persistent operation journal |
-| Review | Fresh sRGB JPEGs, detail crops, decoded pixel comparison, recorded A/B/C choices |
+| Review | Agent-requested detail regions, synchronized before/after detail views, fresh sRGB JPEGs, decoded pixel comparison, recorded A/B/C choices |
 | Manual operations | Capture and inspect native edits such as a crop or a UI-created mask |
 
 **Experimental.** A live browser trial completed RAW upload/import, virtual-copy creation, an Astra-proposed global edit, fresh rendering, a second model review, and final JPEG export. Its final selection tested the integration; it was not a new photographer preference. The earlier guided trial also covered crop capture and existing-mask controls. Global snapshot restoration reached an exact pixel match after an additional export; mask snapshots restored recorded settings but retained small pixel differences. General mask rollback and photographic quality across varied images remain unresolved. The [validation record](LIVE_VALIDATION.md) separates these observations from mocked tests.
 
-The autonomous demo currently changes **global numeric settings only**. Automatic cropping, mask creation/local editing in the demo, AI Denoise, independent judges, and an MCP server are future work. A running desktop Lightroom session is required. `RPA_MODEL` overrides the default `gpt-6-astra`; `RPA_MAX_EDITS` sets a budget from 1–10 edits, default 6.
+The autonomous demo currently changes **global numeric settings only**. Native subject/background creation and a guarded existing-mask agent loop are implemented; local demo editing stays disabled until restoration validation passes. Automatic cropping, AI Denoise, independent judges, and an MCP server remain future work. A running desktop Lightroom session is required. `RPA_MODEL` overrides the default `gpt-6-astra`; `RPA_MAX_EDITS` sets a budget from 1–10 edits, default 6.
 
 ## Development
 
@@ -105,7 +105,7 @@ npm run check
 npm test
 ```
 
-CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus **104 [Lua 5.1 contract checks](plugin/RawPhotoAgent.lrplugin/tests/README.md)**. The 81 TypeScript tests include upload guards, session controls, model decision validation, and recovery. Mock tests do not establish native Lightroom or photographic quality.
+CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus **159 [Lua 5.1 contract checks](plugin/RawPhotoAgent.lrplugin/tests/README.md)**. TypeScript tests include upload guards, session controls, labeled detail evidence, model decision validation, 16-bit mask diagnostics, corpus integrity, blinded review, and recovery. Mock tests do not establish native Lightroom or photographic quality.
 
 ```text
 src/          Controller, CLI, demo server/agent, SQLite journal, image comparison
@@ -121,9 +121,13 @@ Generated configuration, photos, run data, previews, and exports stay out of Git
 
 - [CLI guide](docs/usage.md) — setup, commands, masks, and interruption recovery.
 - [Editing workflow](EDITING_WORKFLOW.md) — how to assess a photo, iterate, and ask for useful feedback.
-- [Architecture and roadmap](DESIGN.md) — the controller boundary and planned interfaces.
+- [Roadmap](ROADMAP.md) — the next milestone, later product capabilities, and quality evaluation.
+- [Quality evaluation](docs/evaluation.md) — repeatable RAW/XMP trials, blinded comparison pages, and photographer votes.
+- [Restoration validation](docs/restoration-validation.md) — measured export variation and the experiments required before autonomous masking.
+- [Render repeatability](docs/render-repeatability.md) — fixed unchanged, checkpoint-only and no-op restore controls.
+- [Architecture](DESIGN.md) — the controller boundary and planned interfaces.
 - [Lightroom plug-in](plugin/README.md) — protocol, native operations, and restrictions.
-- [Live validation](LIVE_VALIDATION.md) — what the first RAW trial established and what it did not.
+- [Live validation](LIVE_VALIDATION.md) — observed Lightroom trials, corpus checks, and remaining limits.
 - [Workflow reference](SIMON_VIDEO_NOTES.md) — notes from Simon d’Entremont’s Lightroom tutorial.
 - [Third-party notices](THIRD_PARTY_NOTICES.md) — attribution for bundled code.
 - [Local demo guide](docs/demo.md) — upload, visual decisions, controls, configuration, and privacy.

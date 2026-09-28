@@ -151,6 +151,15 @@ The requested decision is journaled, the chosen checkpoint is restored and verif
 
 ## Check rendering and restoration
 
+For an **existing-mask diagnostic**, first create a separate working copy/run, open Masking, select the intended mask, and capture that state as a baseline. Then run:
+
+```sh
+node src/cli.ts verify-mask-roundtrip \
+  --run 'RUN_ID' --candidate 'MASK_BASELINE_CANDIDATE_ID' --mask 'MASK_ID'
+```
+
+This records two unchanged-state exports, makes one bounded native mask exposure change (normally +0.25), verifies its readback and visible effect, repeats the changed export, and restores the native baseline once. Restoration allows one additional export, never another mutation. The report separates saved-baseline agreement, unchanged export repeatability, applied effect, restored settings, and exact restored pixels. It preserves all evidence and returns exit code 2 with `passed: false` when any check fails. The test uses 2048-pixel exports and does not establish mask creation/deletion recovery or full-resolution equivalence. Uncertain native errors preserve the shared session lock and require inspection before further work.
+
 For an active run whose current state matches a chosen baseline, this command performs a real mutation test on its working virtual copy:
 
 ```sh
@@ -222,7 +231,17 @@ If a process crash leaves `session.lock` or `bridge/call.lock`, inspect its reco
 Runtime data stays under `.runtime/`: `runs.sqlite` holds candidates, choices, and events; `renders/` holds preview files; `bridge/` holds request/response transport; and `RawPhotoAgent.lrplugin/` is the prepared plug-in. Keep that state together when retaining a run. Lightroom separately owns the virtual copies and native snapshots in its catalog.
 
 - The running desktop Lightroom session is required. Commands serialize access to this bridge; they do not prevent a person or another plug-in from changing Lightroom between commands. State checks reject mismatches.
-- Existing-mask selection, local exposure, and local texture have passed a live test on the sample RAW; check `capabilities` for the running plug-in. Exact mask settings restoration passed, while strict mask pixel restoration did not. Subject/background mask creation uses Lightroom's UI; a general bridge-based creation operation remains unsupported.
+- Existing-mask selection, local exposure, and local texture have passed a live test on the sample RAW; check `capabilities` for the running plug-in. Exact mask settings restoration passed, while strict mask pixel restoration did not. Guarded native subject/background creation is implemented; stored identity and selection do not certify completed pixel coverage or recovery. Autonomous demo masking remains disabled.
 - AI denoise automation is not a verified feature. Do not assume a denoise operation preserves photo identity or that a settings JSON object captures every native dependency.
-- Comparison presentation, automatic aesthetic scoring, autonomous refinement, final-delivery export presets, batch processing, and independent judge loops are not implemented.
+- The demo supports comparison, iterative global edits, and a final JPEG export. Automatic aesthetic scoring, selective autonomous refinement, final-delivery export presets, a production batch workflow, and independent judge loops remain future work.
 - The photographic procedure and future architecture are in [DESIGN.md](../DESIGN.md); the selected tutorial is documented in [SIMON_VIDEO_NOTES.md](../SIMON_VIDEO_NOTES.md).
+
+### Lossless restoration diagnostics
+
+`render --run ID --candidate ID --format TIFF` exports a separate 16-bit sRGB TIFF; the candidate's saved JPEG remains unchanged. Use `verify-mask-roundtrip --run ID --candidate ID --mask MASK_ID --format TIFF` on an explicitly selected diagnostic copy to compare unchanged controls, a local exposure change, and a single restoration. Image differences report `bitDepth`; 16-bit channel values range from 0 to 65535. Exact state and exact pixels remain separate checks. See [restoration validation](restoration-validation.md) and [quality evaluation](evaluation.md).
+
+For a repeatable corpus pilot, `node src/restoration/cli.ts run --id RAW_ASSET_ID --mask subject --controls 3` creates isolated copies, captures matched controls and both restoration stages, and records native sample, metadata and spatial evidence. `analyze --result /absolute/path/to/results.json` rechecks saved TIFFs without Lightroom. The separate `resume-import` command is restricted to an explicitly reconciled import-only `STALE_STATE` failure; its full requirements and source-verification scope are documented in [restoration validation](restoration-validation.md#reconciled-import-only-interruption).
+
+`checkpoint-controls --result /absolute/path/to/completed/results.json --id RAW_ASSET_ID` separates unchanged exports, checkpoint-only exports, and restoration of an already-current snapshot on a new diagnostic copy. It captures nine fixed TIFFs without adjusting any development setting. See [render repeatability controls](render-repeatability.md) for its targeting requirements and environment scope.
+
+If a separately inspected restart changes the native settings structure, an explicit `--source-baseline /absolute/path/to/baseline.json` containing `{ "state": PHOTO_STATE, "reason": "WHY_A_NEW_BASELINE_IS_NEEDED" }` starts a new diagnostic baseline. Preserve the observed difference and use the same frozen baseline for every matched configuration. The runner still requires exact current identity, token and full settings before copying; it retains both historical and new states and makes no equivalence or historical restoration claim. Without this option, the historical baseline remains mandatory.

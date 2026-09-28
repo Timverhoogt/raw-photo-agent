@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import sharp from 'sharp';
-import { verifyRestoredRendering } from '../src/images.ts';
+import { compareImages, verifyRestoredRendering } from '../src/images.ts';
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'rpa-render-verification-'));
@@ -20,6 +20,20 @@ async function fixture(t: TestContext) {
   await sharp(pixels, { raw: { width: 16, height: 16, channels: 3 } }).png().toFile(differing);
   return { reference, matching, differing };
 }
+
+test('lossless comparison detects a one-level 16-bit difference hidden by 8-bit conversion', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'rpa-16bit-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const before = join(directory, 'before.tif'); const after = join(directory, 'after.tif');
+  const pixels = new Uint16Array([10000, 20000, 30000, 10000, 20000, 30000]);
+  await sharp(pixels, { raw: { width: 2, height: 1, channels: 3 } }).toColourspace('rgb16').tiff({ compression: 'none' }).toFile(before);
+  pixels[5] = 30001;
+  await sharp(pixels, { raw: { width: 2, height: 1, channels: 3 } }).toColourspace('rgb16').tiff({ compression: 'none' }).toFile(after);
+  const result = await compareImages(before, after);
+  assert.equal(result.bitDepth, 16); assert.equal(result.pixelsIdentical, false);
+  assert.equal(result.maximumChannelDifference, 1); assert.equal(result.changedChannelFraction, 1 / 6);
+  assert.equal((await compareImages(before, before)).pixelsIdentical, true);
+});
 
 test('an exact first restored render needs only one export', async t => {
   const { reference, matching } = await fixture(t);

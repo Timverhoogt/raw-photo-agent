@@ -6,6 +6,7 @@ import { RunStore } from './store.ts';
 import { PhotoController } from './controller.ts';
 import { getPaths, preparePlugin } from './config.ts';
 import { compareImages, detailCrop, verifyRestoredRendering } from './images.ts';
+import { verifyMaskRoundtrip } from './mask-validation.ts';
 
 const help = `Raw Photo Agent — local Lightroom Classic controller
 
@@ -22,13 +23,14 @@ node src/cli.ts edit --run ID --parent CANDIDATE --set '{"Exposure2012":0.25}' -
 node src/cli.ts edit-mask --run ID --parent CANDIDATE --mask MASK_ID --set '{"local_Exposure":0.2}' --reason TEXT [--direction TEXT]
 node src/cli.ts capture --run ID --reason TEXT [--parent CANDIDATE]
 node src/cli.ts restore --run ID --candidate ID
-node src/cli.ts render --run ID --candidate ID [--size 2048]
+node src/cli.ts render --run ID --candidate ID [--size 2048] [--format JPEG|TIFF]
 node src/cli.ts compare --run ID --candidates ID,ID[,ID] --question TEXT
 node src/cli.ts choose --choice ID --candidate ID [--feedback TEXT]
 node src/cli.ts reconcile --run ID --candidate ID
 node src/cli.ts recover --run ID --candidate ID Restore an interrupted run; verify before resume
 node src/cli.ts resume-start --run ID --photo ID --filename NAME
 node src/cli.ts verify-roundtrip --run ID --candidate ID
+node src/cli.ts verify-mask-roundtrip --run ID --candidate ID --mask MASK_ID [--format JPEG|TIFF]
 node src/cli.ts image-diff --before PATH --after PATH
 node src/cli.ts crop --input PATH --output PATH --region '{"left":0,"top":0,"width":512,"height":512}'
 
@@ -37,7 +39,7 @@ Start requires the filename explicitly chosen by the user; it creates a virtual 
 All edits and restoration are restricted by the plugin to selected virtual copies.
 `;
 
-const valueOptions = ['photo','filename','intent','run','parent','mask','set','reason','candidate','size','candidates','question','choice','feedback','before','after','input','output','region','direction'] as const;
+const valueOptions = ['photo','filename','intent','run','parent','mask','set','reason','candidate','size','format','candidates','question','choice','feedback','before','after','input','output','region','direction'] as const;
 const { values, positionals } = parseArgs({ options: Object.fromEntries(valueOptions.map(name => [name, { type: 'string' as const }])), allowPositionals: true });
 const command = positionals[0] ?? 'help';
 const required = (name: string) => {
@@ -74,6 +76,7 @@ async function main() {
   const changesSession = !['status','capabilities','selected','state','selected-mask','history'].includes(command);
   const lockPath = join(paths.runtime, 'session.lock');
   let lock: number | undefined;
+  let preserveLock = false;
   try {
     if (changesSession) {
       try { lock = openSync(lockPath, 'wx', 0o600); }
@@ -103,11 +106,17 @@ async function main() {
         output(await controller.render(required('run'), candidate.id)); break;
       }
       case 'restore': output(await controller.restore(required('run'), required('candidate'))); break;
-      case 'render': output(await controller.render(required('run'), required('candidate'), Number(values.size ?? '2048'))); break;
+      case 'render': output(await controller.render(required('run'), required('candidate'), Number(values.size ?? '2048'), (values.format ?? 'JPEG') as 'JPEG' | 'TIFF')); break;
       case 'compare': output(controller.compare(required('run'), required('candidates').split(','), required('question'))); break;
       case 'choose': output(await controller.choose(required('choice'), required('candidate'), values.feedback as string | undefined)); break;
       case 'reconcile': output(await controller.reconcile(required('run'), required('candidate'))); break;
       case 'resume-start': output(await controller.resumeStart(required('run'), required('photo'), required('filename'))); break;
+      case 'verify-mask-roundtrip': {
+        const report = await verifyMaskRoundtrip(controller, required('run'), required('candidate'), required('mask'), (values.format ?? 'JPEG') as 'JPEG' | 'TIFF');
+        output(report);
+        if (!report.passed) process.exitCode = 2;
+        break;
+      }
       case 'recover': {
         const run = controller.run(required('run'));
         if (run.status !== 'interrupted') throw new Error('recover is only for interrupted runs. Use restore otherwise.');
@@ -149,16 +158,21 @@ async function main() {
         });
         } catch (error) {
           store.setRunStatus(runId, 'interrupted');
-          store.addEvent(runId, 'roundtrip_interrupted', { candidateId, message: String(error) });
-          throw new Error(`${String(error)}. Roundtrip interrupted; inspect Lightroom, recover candidate ${candidateId}, then reconcile run ${runId}.`);
+          store.addEvent(runId, 'roundtrip_interrupted', { candidateId, message: String(error),
+            next: `Inspect Lightroom, recover candidate ${candidateId}, then reconcile run ${runId}.` });
+          // Preserve the bridge's uncertainty flag so the shared lock survives.
+          throw error;
         }
         break;
       }
       default: throw new Error(`Unknown command: ${command}. Run help.`);
     }
+  } catch (error) {
+    preserveLock = !!(error && typeof error === 'object' && 'outcomeUncertain' in error && error.outcomeUncertain);
+    throw error;
   } finally {
     store.close();
-    if (lock !== undefined) { closeSync(lock); unlinkSync(lockPath); }
+    if (lock !== undefined) { closeSync(lock); if (!preserveLock) unlinkSync(lockPath); }
   }
 }
 main().catch(error => {

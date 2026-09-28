@@ -6,6 +6,8 @@
       "type": "string",
       "enum": [
         "edit",
+        "local-edit",
+        "inspect",
         "restore",
         "ask",
         "finish"
@@ -213,6 +215,18 @@
           ],
           "minimum": 0,
           "maximum": 100
+        },
+        "local_Exposure": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "local_Texture": {
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "required": [
@@ -238,7 +252,9 @@
         "LuminanceNoiseReductionContrast",
         "ColorNoiseReduction",
         "ColorNoiseReductionDetail",
-        "ColorNoiseReductionSmoothness"
+        "ColorNoiseReductionSmoothness",
+        "local_Exposure",
+        "local_Texture"
       ]
     },
     "candidateId": {
@@ -262,6 +278,48 @@
         "maxLength": 160
       },
       "maxItems": 3
+    },
+    "detailPoints": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,39}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "x",
+          "y"
+        ]
+      }
+    },
+    "maskId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200
     }
   },
   "required": [
@@ -272,6 +330,8 @@
     "adjustments",
     "candidateId",
     "question",
-    "options"
+    "options",
+    "detailPoints",
+    "maskId"
   ]
 }

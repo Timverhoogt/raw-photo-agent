@@ -165,6 +165,12 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
         res.writeHead(200,{ 'Content-Type':'image/jpeg', 'Content-Length':info.size, ...(preview[2] === 'final' ? {'Content-Disposition':'attachment; filename="raw-photo-agent-final.jpg"'} : {}) });
         createReadStream(path).on('error', () => res.destroy()).pipe(res); return;
       }
+      const detail = /^\/api\/details\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+      if (req.method === 'GET' && detail) {
+        const path = engine.detail(detail[1]!, detail[2]!, detail[3]!); const info = await stat(path);
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': info.size });
+        createReadStream(path).on('error', () => res.destroy()).pipe(res); return;
+      }
       if (req.method !== 'POST') { json(res,404,{error:'Not found.'}); return; }
       if (url.pathname === '/api/uploads') { const upload = await receiveUpload(req,uploadRoot); json(res,201,{upload:{id:upload.id,name:upload.name,size:upload.size}}); return; }
       if (url.pathname === '/api/lightroom/open') {
@@ -181,11 +187,12 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
         engine.start({intent:textValue(input.intent,'intent'), upload, useSelected:input.useSelected === true});
         json(res,202,{ok:true}); return;
       }
-      const control = /^\/api\/sessions\/([^/]+)\/(pause|resume|stop|answer|choose)$/.exec(url.pathname);
+      const control = /^\/api\/sessions\/([^/]+)\/(pause|resume|retry|stop|answer|choose)$/.exec(url.pathname);
       if (control) {
         const [,id,action] = control;
         if (action === 'pause') engine.pause(id!);
         if (action === 'resume') engine.resume(id!);
+        if (action === 'retry') engine.retry(id!);
         if (action === 'stop') engine.stop(id!);
         if (action === 'answer') engine.answer(id!,textValue(input.questionId,'questionId'),textValue(input.answer,'answer'));
         if (action === 'choose') engine.choose(id!,textValue(input.candidateId,'candidateId'));

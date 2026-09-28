@@ -9,15 +9,18 @@ import { BridgeError, FileBridge } from "../src/bridge.ts";
 
 type Request = { protocolVersion: number; id: string; operation: string; params: Record<string, unknown>; issuedAt: number; deadlineAt: number };
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
+// Response/protocol tests must not race CPU-heavy native image diagnostics.
+// The dedicated timeout test below supplies its own short deadline.
+const PEER_TIMEOUT_MS = 5_000;
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "lightroom-bridge-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  return { directory, bridge: new FileBridge(directory, { timeoutMs: 1_000, pollMs: 5 }) };
+  return { directory, bridge: new FileBridge(directory, { timeoutMs: PEER_TIMEOUT_MS, pollMs: 5 }) };
 }
 
 async function nextRequest(directory: string): Promise<Request> {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + PEER_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
       const names = await readdir(join(directory, "requests"));
@@ -48,7 +51,7 @@ test("atomic request roundtrip validates the protocol and private permissions", 
     assert.equal(request.operation, "set_exposure");
     assert.deepEqual(request.params, { exposure: 0.25 });
     assert.ok(request.issuedAt <= Date.now());
-    assert.equal(request.deadlineAt - request.issuedAt, 1_000);
+    assert.equal(request.deadlineAt - request.issuedAt, PEER_TIMEOUT_MS);
     for (const path of [directory, join(directory, "requests"), join(directory, "responses")]) {
       assert.equal((await stat(path)).mode & 0o777, 0o700);
     }
@@ -85,7 +88,7 @@ test("remote uncertainty honors explicit flags and conservatively handles older 
     ...["VERIFY_FAILED", "RESTORE_UNVERIFIED", "OUTCOME_UNKNOWN", "RENDER_STALE"].map(code => ({
       operation: "apply", error: { code, message: "Inspect the current photo." }, expected: true,
     })),
-    ...["create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "adjust_mask"].map(operation => ({
+    ...["create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "create_background_mask", "auto_tone", "adjust_mask"].map(operation => ({
       operation, error: { code: "INTERNAL_ERROR", message: "Unexpected exception." }, expected: true,
     })),
     { operation: "read_state", error: { code: "INTERNAL_ERROR", message: "Read failed." }, expected: false },
