@@ -25,6 +25,11 @@ return function(U, config)
     -- Controller names/units differ from getDevelopSettings/XMP field names.
     -- Read native ranges and values instead of assuming a normalized scale.
     local localSettings = { local_Exposure = 'LocalExposure2012', local_Texture = 'LocalTexture' }
+    local importExtensions = U.array({ '3fr', 'arw', 'cr2', 'cr3', 'crw', 'dcr', 'dng', 'erf',
+        'fff', 'iiq', 'kdc', 'mef', 'mos', 'mrw', 'nef', 'nrw', 'orf', 'pef', 'ptx', 'raf', 'raw',
+        'rw2', 'rwl', 'sr2', 'srf', 'srw' })
+    local importExtensionSet = {}
+    for _, extension in ipairs(importExtensions) do importExtensionSet[extension] = true end
 
     local function photoId(catalog, photo)
         return LrMD5.digest(catalog:getPath()) .. ':' .. tostring(photo.localIdentifier)
@@ -190,21 +195,91 @@ return function(U, config)
         return LrPathUtils.child(config.checkpoints, LrMD5.digest(id .. '\n' .. snapshotId) .. '.json')
     end
 
+    local function importPath(params)
+        local path = U.text(params.path, 'path', 2048)
+        local filename = U.text(params.filename, 'filename', 255)
+        if filename:find('[/\\]') or filename:find('[%z\1-\31\127]')
+            or filename:sub(1, 1) == '.' or filename:find('..', 1, true) then
+            U.fail('INVALID_IMPORT_PATH', 'filename must be a basename without separators, control characters, a leading period, or consecutive periods.')
+        end
+        local root = config.importRoot
+        if type(root) ~= 'string' or path:sub(1, #root + 1) ~= root .. '/' then
+            U.fail('INVALID_IMPORT_PATH', 'Uploaded RAW path must be beneath the configured importRoot.')
+        end
+        local relative = path:sub(#root + 2)
+        local directory, leaf = relative:match('^([^/]+)/([^/]+)$')
+        local a, b, c, d, e
+        if directory then a, b, c, d, e = directory:match('^(%x+)%-(%x+)%-(%x+)%-(%x+)%-(%x+)$') end
+        if not a or #a ~= 8 or #b ~= 4 or #c ~= 4 or #d ~= 4 or #e ~= 12 or leaf ~= filename then
+            U.fail('INVALID_IMPORT_PATH', 'Uploaded RAW path must be importRoot/UUID/filename with an exact filename match.')
+        end
+        local extension = filename:match('%.([A-Za-z0-9]+)$')
+        if not extension or not importExtensionSet[extension:lower()] then
+            U.fail('UNSUPPORTED_FORMAT', 'Only the listed camera RAW and DNG filename extensions may be imported.')
+        end
+        if LrFileUtils.exists(path) ~= 'file' then
+            U.fail('IMPORT_FILE_MISSING', 'The uploaded RAW file does not exist.')
+        end
+        -- The SDK resolves aliases/shortcuts in every component. It exposes no
+        -- documented lstat/no-follow primitive: the upload server must also
+        -- reject Unix symlinks when creating and validating its private files.
+        if LrFileUtils.resolveAllAliases(root) ~= root or LrFileUtils.resolveAllAliases(path) ~= path then
+            U.fail('INVALID_IMPORT_PATH', 'Aliases or redirected import paths are not permitted.')
+        end
+        local attrs = LrFileUtils.fileAttributes(path)
+        if type(attrs) ~= 'table' or not U.finite(attrs.fileSize) or attrs.fileSize <= 0 then
+            U.fail('IMPORT_FILE_EMPTY', 'The uploaded RAW must be a nonempty file.')
+        end
+        return path
+    end
+
+    local function sameCatalog(catalog)
+        if LrApplication.activeCatalog():getPath() ~= catalog:getPath() then
+            U.fail('TARGET_CHANGED', 'The active Lightroom catalog changed during the operation.')
+        end
+    end
+
+    local function developSelected(catalog, photo, request)
+        local id = photoId(catalog, photo)
+        target(id, false, false)
+        local before = state(catalog, photo)
+        U.checkDeadline(request)
+        if LrApplicationView.getCurrentModuleName() ~= 'develop' then
+            request._mutationStarted = true -- UI action; its outcome is uncertain on timeout.
+            LrApplicationView.switchToModule('develop')
+        end
+        local untilTime = math.min(request.deadlineAt, U.now() + 5000)
+        repeat
+            target(id, false, false)
+            expected(catalog, photo, before.stateToken)
+            if LrApplicationView.getCurrentModuleName() == 'develop' then
+                return describe(catalog, photo)
+            end
+            if U.now() >= untilTime then break end
+            LrTasks.sleep(0.1)
+        until false
+        U.fail('REVEAL_UNVERIFIED', 'Lightroom did not enter Develop; inspect its current selection and module.')
+    end
+
     function O.capabilities(params)
         U.keys(params, {})
         return {
             protocolVersion = 1, pluginVersion = U.version,
             lightroomVersion = LrApplication.versionString(),
-            bridgeDir = config.bridgeDir, exportRoot = config.exportRoot,
+            bridgeDir = config.bridgeDir, exportRoot = config.exportRoot, importRoot = config.importRoot,
             operations = { capabilities = true, selected = true, create_working_copy = true,
                 read_state = true, checkpoint = true, apply = true, restore = true, render = true,
-                selected_mask = true, select_mask = true, create_subject_mask = false, adjust_mask = true },
+                selected_mask = true, select_mask = true, create_subject_mask = false, adjust_mask = true,
+                import_photo = true, reveal_photo = true },
+            importExtensions = importExtensions, importPathLayout = 'importRoot/UUID/safe-filename.ext',
             numericAdjustments = numericRanges, stringAdjustments = { WhiteBalance = U.array({ 'Custom' }) },
             localAdjustments = { local_Exposure = 'dynamic: selected_mask.parameters.local_Exposure',
                 local_Texture = 'dynamic: selected_mask.parameters.local_Texture' },
             liveValidated = false,
             restrictions = U.array({
                 'Exactly one selected matching photo is required for target operations.',
+                'Uploaded RAW import is restricted to importRoot; it adds or finds an original, selects it, and enters Develop without applying edits.',
+                'The upload server must reject Unix symlinks; the SDK additionally rejects paths redirected by its alias resolver.',
                 'Photo mutations require a virtual copy; global editing requires RAW or DNG.',
                 'Native snapshot restore requires Develop and a checkpoint created by this bridge.',
                 'Mask creation and Denoise are not enabled; existing-mask exposure/texture require Develop with Masking open.',
@@ -221,6 +296,62 @@ return function(U, config)
         local photos = U.array()
         for _, photo in ipairs(selection(catalog)) do photos[#photos + 1] = describe(catalog, photo) end
         return { photos = photos, count = #photos, photoId = #photos == 1 and photos[1].photoId or nil }
+    end
+
+    function O.import_photo(params, request)
+        U.keys(params, { path = true, filename = true })
+        local path = importPath(params)
+        local catalog = LrApplication.activeCatalog()
+        U.checkDeadline(request)
+        local photo = catalog:findPhotoByPath(path)
+        if not photo then
+            write(catalog, request, 'Raw Photo Agent import uploaded RAW', function()
+                sameCatalog(catalog)
+                importPath(params)
+                -- Recheck inside the write gate to avoid a duplicate import if
+                -- another action imported this exact path while we waited.
+                photo = catalog:findPhotoByPath(path)
+                if not photo then
+                    U.checkDeadline(request)
+                    request._mutationStarted = true
+                    photo = catalog:addPhoto(path)
+                end
+            end)
+        end
+        sameCatalog(catalog)
+        if not photo or photo:getRawMetadata('isVirtualCopy') == true
+            or photo:getRawMetadata('path') ~= path then
+            U.fail('IMPORT_UNVERIFIED', 'The imported catalog entry could not be verified as the requested original.')
+        end
+        rawOnly(photo)
+        available(photo)
+        importPath(params)
+        local before = state(catalog, photo)
+        U.checkDeadline(request)
+        sameCatalog(catalog)
+        request._mutationStarted = true -- Selection is part of the requested action.
+        catalog:setSelectedPhotos(photo, {})
+        local id = photoId(catalog, photo)
+        local untilTime = math.min(request.deadlineAt, U.now() + 5000)
+        repeat
+            sameCatalog(catalog)
+            local selected = selection(catalog)
+            if #selected == 1 and photoId(catalog, selected[1]) == id then
+                expected(catalog, photo, before.stateToken)
+                return developSelected(catalog, photo, request)
+            end
+            if U.now() >= untilTime then break end
+            LrTasks.sleep(0.1)
+        until false
+        U.fail('IMPORT_UNVERIFIED', 'Lightroom did not select exactly the imported original; inspect the catalog before retrying.')
+    end
+
+    function O.reveal_photo(params, request)
+        U.keys(params, { photoId = true })
+        local catalog, photo = target(params.photoId, false, false)
+        rawOnly(photo)
+        available(photo)
+        return developSelected(catalog, photo, request)
     end
 
     function O.read_state(params)

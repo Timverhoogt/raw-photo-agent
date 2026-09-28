@@ -18,8 +18,9 @@ local function loadConfig()
     if type(loaded) ~= 'table' then U.fail('INVALID_CONFIG', 'config.json must contain an object.') end
     local bridgeDir = U.absoluteDirectory(loaded.bridgeDir or LrPathUtils.child(_PLUGIN.path, 'runtime'), 'bridgeDir')
     local exportRoot = U.absoluteDirectory(loaded.exportRoot or LrPathUtils.child(bridgeDir, 'renders'), 'exportRoot')
+    local importRoot = U.absoluteDirectory(loaded.importRoot or LrPathUtils.child(bridgeDir, 'uploads'), 'importRoot')
     local result = {
-        bridgeDir = bridgeDir, exportRoot = exportRoot,
+        bridgeDir = bridgeDir, exportRoot = exportRoot, importRoot = importRoot,
         requests = LrPathUtils.child(bridgeDir, 'requests'),
         responses = LrPathUtils.child(bridgeDir, 'responses'),
         receipts = LrPathUtils.child(bridgeDir, 'receipts'),

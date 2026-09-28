@@ -10,7 +10,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
-    "cli": "node src/cli.ts"
+    "cli": "node src/cli.ts",
+    "demo": "node src/demo/server.ts"
   },
   "dependencies": {
     "sharp": "0.35.5"

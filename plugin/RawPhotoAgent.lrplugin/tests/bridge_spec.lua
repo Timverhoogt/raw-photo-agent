@@ -2,6 +2,7 @@
 _PLUGIN = _PLUGIN or { path = 'plugin/RawPhotoAgent.lrplugin' }
 local actualDofile = dofile
 local now, tasks, fs, dispatched, active, peak = 100000, {}, {}, 0, 0, 0
+local observedConfig
 local function clone(value)
     if type(value) ~= 'table' then return value end
     local result = {}; for key, item in pairs(value) do result[key] = clone(item) end; return result
@@ -63,12 +64,16 @@ local operations = {
         return { state = { stateToken = 'new' } }
     end,
 }
+operations.import_photo = operations.apply
+operations.reveal_photo = operations.apply
 function dofile(path)
     if path == _PLUGIN.path .. '/Util.lua' then return U end
-    if path == _PLUGIN.path .. '/Operations.lua' then return function() return operations end end
+    if path == _PLUGIN.path .. '/Operations.lua' then
+        return function(_, config) observedConfig = clone(config); return operations end
+    end
     return actualDofile(path)
 end
-fs[_PLUGIN.path .. '/config.json'] = { bridgeDir = '/bridge', exportRoot = '/renders' }
+fs[_PLUGIN.path .. '/config.json'] = { bridgeDir = '/bridge', exportRoot = '/renders', importRoot = '/uploads' }
 local B = actualDofile(_PLUGIN.path .. '/Bridge.lua')
 local function tick(milliseconds)
     local untilTime = now + milliseconds
@@ -94,6 +99,7 @@ local function response(n) return assert(fs['/bridge/responses/' .. id(n) .. '.j
 local checks = 0
 local function check(condition, label) assert(condition, label); checks = checks + 1 end
 B.start(); tick(100)
+check(observedConfig.importRoot == '/uploads', 'configured import root reaches operation handlers')
 submit(1, 'selected'); tick(500)
 check(response(1).ok and dispatched == 1, 'read request completes')
 submit(1, 'apply'); tick(500)
@@ -115,12 +121,19 @@ check(response(7).error.code == 'UNKNOWN_OPERATION', 'unknown operation rejects'
 submit(8, 'apply'); submit(9, 'apply'); tick(1500)
 check(response(8).ok and response(9).ok and peak == 1, 'operations serialize while SDK yields')
 check(fs['/bridge/heartbeat.json'].status == 'idle', 'heartbeat remains available')
+submit(11, 'import_photo', { crash = true }); tick(1000)
+check(response(11).error.outcomeUncertain, 'native import failure after execution starts is uncertain')
+submit(12, 'import_photo', { reject = true }); tick(500)
+check(not response(12).error.outcomeUncertain, 'import precondition failure is known not applied')
+submit(13, 'reveal_photo', { crash = true }); tick(1000)
+check(response(13).error.outcomeUncertain, 'failed module switch after execution starts is uncertain')
 B.stop(); tick(1500)
 check(fs['/bridge/heartbeat.json'].status == 'stopped', 'shutdown marks heartbeat stopped')
 B.start(); tick(1500)
 check(fs['/bridge/heartbeat.json'].status == 'idle', 'worker can restart without duplicate dispatch')
 -- Regression: Lightroom reload calls Init while Shutdown's worker is still alive.
 RawPhotoAgentBridge = B
+fs[_PLUGIN.path .. '/config.json'].importRoot = nil
 submit(10, 'apply'); tick(250)
 actualDofile(_PLUGIN.path .. '/Shutdown.lua')
 actualDofile(_PLUGIN.path .. '/Init.lua')
@@ -128,6 +141,7 @@ check(RawPhotoAgentStarting and RawPhotoAgentBridge == B, 'reload waits for the 
 tick(1500)
 check(RawPhotoAgentBridge ~= B and RawPhotoAgentBridge.running and not B.workerActive,
     'reload replaces the module and restarts after old worker exits')
+check(observedConfig.importRoot == '/bridge/uploads', 'missing importRoot defaults to an uploads child of bridgeDir')
 check(response(10).ok and peak == 1, 'reload does not overlap or replay an in-flight mutation')
 local reloaded = RawPhotoAgentBridge
 actualDofile(_PLUGIN.path .. '/Init.lua')

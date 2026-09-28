@@ -26,6 +26,16 @@ The earlier mask/no-mask restoration test recovered exact recorded settings in b
 
 The user viewed two edited interpretations and selected B, the closer crop. The selected JPEG is 5035 × 2760 pixels and embeds the sRGB IEC61966-2.1 profile. An independent read-only SHA-256 comparison verified that the delivery file matches the export referenced by its recorded candidate. The image and its runtime references are excluded from the repository.
 
-## Scope
+## Local browser demo trial
+
+On 28 September 2026, the local dashboard was tested with the same Canon CR3 through its browser file chooser. The 33 MiB upload was copied into a private local upload folder, imported through the Lightroom SDK, selected in Develop, and used to create a separate virtual copy and baseline preview.
+
+Two real GPT-6 Astra calls ran through the signed-in Codex CLI. The first inspected the baseline JPEG and proposed three absolute global settings: highlights −25, shadows +18, and temperature 6000 K. Lightroom applied those settings and rendered a new preview. The second call compared that preview with the baseline and recommended stopping. Its public observations and adjustment rationale appeared in the dashboard journal. No preset or simulated agent response was used.
+
+An integration-test selection of the current edit exercised the comparison endpoint and final export. This was a test action, not an additional photographer preference judgment. The resulting JPEG was 6720 × 4480 with an embedded sRGB profile. SHA-256 comparison confirmed that the uploaded RAW copy matched the source file, and the editing-session lock was released on completion. The earlier photographer-selected closer crop remains a separate run.
+
+Browser checks covered RAW selection, start, live preview and journal updates, A/B presentation, selection, and the completed state. Pause/resume, stale question rejection, uncertain-operation handling, upload constraints, and competing server ownership also have automated tests; this trial does not establish every interruption or recovery path in native Lightroom. The dashboard shows verified renders and public decision summaries. Lightroom changes in its own native window; cursor movement and a screen-sharing feed are not part of this implementation.
+
+## Validation limits
 
 The live evidence covers one RAW and installation: the global-exposure cycle, existing-mask selection/readback/adjustment, human preference selection, and the distinct restoration results above. It does not establish exact mask pixel rollback, AI denoise, other native dependencies, all cameras, or interrupted operations. Photographic quality still requires inspecting the actual images and obtaining the user's preference where appropriate; one selected result is not an objective quality benchmark or evidence of a fully autonomous editor.

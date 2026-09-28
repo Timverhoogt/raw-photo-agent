@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#171918">
+    <title>RAW / Lightroom workspace</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to photo workspace</a>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/></symbol>
+      <symbol id="icon-window" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9M10 4H4v16h16v-6"/></symbol>
+      <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m3 16 5-5 5 5 3-3 5 5"/><circle cx="15.5" cy="8.5" r="1.5"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    </svg>
+
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="RAW Photo Agent home">RAW<span class="wordmark-slash">/</span><span class="wordmark-detail">PHOTO AGENT</span></a>
+      <p class="masthead-caption">Lightroom workspace</p>
+      <div class="connections" aria-label="Connection status">
+        <span id="lightroom-status" class="connection"><span class="status-dot"></span><span>Connecting to Lightroom</span></span>
+        <span id="agent-status" class="connection"><span class="status-dot"></span><span>Checking agent</span></span>
+      </div>
+    </header>
+
+    <main id="workspace" class="workbench">
+      <section class="photo-column" aria-labelledby="workspace-title">
+        <div class="workspace-heading">
+          <div><p class="eyebrow">THE WORKSPACE</p><h1 id="workspace-title">Develop a photograph.</h1><p id="workspace-subtitle" class="subtitle">Choose a RAW and watch each edit take shape in Lightroom.</p></div>
+          <span id="session-badge" class="session-badge">READY WHEN YOU ARE</span>
+        </div>
+
+        <section id="setup-panel" class="setup-panel" aria-label="Start a photo edit">
+          <div class="setup-topline"><h2>Choose a photograph</h2><span class="step-number">01 / BEGIN</span></div>
+          <div class="setup-grid">
+            <div class="source-selection">
+              <div class="source-tabs" role="group" aria-label="Photo source">
+                <button id="source-upload" class="source-tab active" type="button" aria-pressed="true">Add a RAW</button>
+                <button id="source-selected" class="source-tab" type="button" aria-pressed="false">Selected in Lightroom</button>
+              </div>
+              <div id="drop-zone" class="drop-zone">
+                <input id="raw-file" class="file-input" type="file" accept=".3fr,.arw,.cr2,.cr3,.dcr,.dng,.fff,.iiq,.kdc,.mos,.mrw,.nef,.nrw,.orf,.pef,.ptx,.raf,.raw,.rw2,.rwl,.sr2,.srf,.srw" aria-label="Choose a RAW photo" aria-describedby="file-hint">
+                <svg class="icon upload-icon" aria-hidden="true"><use href="#icon-upload"/></svg>
+                <div><strong id="file-label">Drop your RAW here</strong><span id="file-hint">or choose a file · up to 200 MiB</span></div>
+                <button id="clear-file" class="icon-button clear-file" type="button" aria-label="Remove selected file" hidden><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
+              </div>
+              <div id="selected-source-note" class="selected-source-note" hidden><svg class="icon" aria-hidden="true"><use href="#icon-image"/></svg><div><strong>Use the photograph already selected.</strong><p>Select exactly one RAW in Lightroom Classic. The agent works on a separate virtual copy.</p></div></div>
+            </div>
+            <div class="intention-field"><label for="intent">What would you like this photo to feel like? <span>Optional</span></label><textarea id="intent" rows="2" maxlength="1600" placeholder="Natural and quiet. Bring out the subject, keep the atmosphere."></textarea></div>
+          </div>
+          <div class="launch-row"><p class="privacy-note">The source RAW stays on your Mac. JPEG previews are sent through your signed-in Codex account for visual review.</p><button id="start-button" class="button button-primary" type="button" disabled>Begin the edit<svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button></div>
+          <p id="start-hint" class="start-hint">Connecting to the local bridge…</p>
+        </section>
+
+        <div id="stage-strip" class="stage-strip" hidden><div class="stage-indicator" aria-hidden="true"></div><div class="stage-copy"><span id="stage-label" class="eyebrow">SESSION</span><p id="stage-text">Preparing the workspace</p></div><span id="candidate-count" class="stage-count"></span><button id="review-choice" class="text-button" type="button" hidden>Review choices<svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button></div>
+
+        <section class="image-workspace" aria-label="Photo preview">
+          <div class="preview-toolbar"><div class="preview-identity"><span class="tiny-square" aria-hidden="true"></span><span id="preview-label">YOUR PHOTOGRAPH</span></div><div class="view-toggle" role="group" aria-label="Preview version"><button id="view-before" type="button" aria-pressed="false" disabled>Before</button><button id="view-after" class="active" type="button" aria-pressed="true" disabled>Current</button></div></div>
+          <div id="photo-stage" class="photo-stage">
+            <div id="preview-empty" class="preview-empty"><div class="frame-glyph" aria-hidden="true"><span></span><span></span><span></span><span></span><div class="frame-sun"></div><div class="frame-horizon"></div></div><p class="empty-title">No preview yet.</p><p>Lightroom previews appear here as the session progresses.</p></div>
+            <img id="main-preview" class="main-preview" alt="" hidden>
+            <div id="image-load-note" class="image-load-note" role="status" hidden>Loading the recorded preview…</div>
+            <div id="preview-caption" class="preview-caption" hidden></div>
+          </div>
+          <div class="preview-footer"><span id="preview-detail">Original RAW → native Lightroom edit → preview</span><button id="open-lightroom" class="text-button" type="button">Show Lightroom<svg class="icon" aria-hidden="true"><use href="#icon-window"/></svg></button></div>
+        </section>
+
+        <div class="lightroom-note"><span class="status-dot" aria-hidden="true"></span>Lightroom opens in its own window; photo edits there are live.</div>
+        <section id="filmstrip-section" class="filmstrip-section" aria-label="Saved photo versions" hidden><div class="section-caption"><h2>THE EDIT, FRAME BY FRAME</h2><span id="filmstrip-count"></span></div><div id="filmstrip" class="filmstrip"></div></section>
+        <section id="choice-panel" class="choice-panel" aria-labelledby="choice-heading" hidden><div class="choice-intro"><p class="eyebrow">YOUR EYE, YOUR CHOICE</p><h2 id="choice-heading" tabindex="-1"></h2><p id="choice-help" class="muted"></p></div><div id="choice-options" class="choice-options"></div><div id="answer-form" class="answer-form" hidden><label for="custom-answer">Or describe your preference</label><div><input id="custom-answer" type="text" maxlength="2000" placeholder="Tell the agent what matters to you…"><button id="send-answer" class="button button-secondary" type="button">Send</button></div></div></section>
+        <section id="completion-panel" class="completion-panel" hidden><div class="completion-mark"><svg class="icon" aria-hidden="true"><use href="#icon-check"/></svg></div><div><p class="eyebrow">SESSION COMPLETE</p><h2 id="completion-title">Edit complete.</h2><p id="completion-text">Your edit and its history are retained in Lightroom and the local session journal.</p></div><a id="download-final" class="button button-secondary" href="#" target="_blank" rel="noopener" hidden>Open selected preview<svg class="icon" aria-hidden="true"><use href="#icon-window"/></svg></a></section>
+        <button id="new-session" class="text-button new-session" type="button" hidden>Begin with another photograph<svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+      </section>
+
+      <aside class="journal-column" aria-labelledby="journal-title"><div class="journal-header"><div><p class="eyebrow">SESSION NOTES</p><h2 id="journal-title">Decision journal<span class="journal-dot" aria-hidden="true"></span></h2></div><p>Adjustments, observations, and next steps.</p></div><div id="journal-empty" class="journal-empty"><span class="journal-empty-rule" aria-hidden="true"></span><p>Waiting for the first preview.</p><p>The agent’s public decision notes appear here when your session begins.</p></div><ol id="journal" class="journal" aria-label="Session decision notes"></ol><div class="journal-bottom"><p id="journal-state">Waiting for a photograph</p><div id="session-controls" class="session-controls" hidden><button id="pause-button" class="button button-secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#icon-pause"/></svg>Pause</button><button id="resume-button" class="button button-primary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg>Resume</button><button id="stop-button" class="text-button" type="button">Finish session</button></div><p class="journal-footnote">Decision notes are a concise account of visible edits, not private model reasoning.</p></div></aside>
+    </main>
+    <footer class="page-footer"><span>RAW PHOTO AGENT</span><span>Native edits · Saved checkpoints</span><span>LOCAL LIGHTROOM WORKSPACE</span></footer>
+    <div id="message-banner" class="message-banner" role="alert" hidden><p id="message-text"></p><button id="dismiss-message" class="icon-button" type="button" aria-label="Dismiss message"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
+    <p id="live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+  </body>
+</html>

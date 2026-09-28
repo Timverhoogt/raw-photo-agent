@@ -7,6 +7,10 @@ local now, selected, files, records, moduleName = 100000, {}, {}, {}, 'develop'
 local mutations, exports, lastRestored, changeDuringRender = 0, 0, nil, false
 local selectedTool, selectedMask, maskSelections = 'masking', nil, 0
 local failMaskSelection, corruptGlobalOnMaskSet, ignoreMaskSet = false, false, false
+local importedPhotos, aliases = {}, {}
+local imports, photoSelections, moduleSwitches, writeDepth = 0, 0, 0, 0
+local failImport, failPhotoSelection, failModuleSwitch = false, false, false
+local importedFormat, switchToOtherPhoto = 'RAW', false
 local function clone(value)
     if type(value) ~= 'table' then return value end
     local copy = {}
@@ -14,13 +18,14 @@ local function clone(value)
     return copy
 end
 
-local function photo(id, virtual)
-    local p = { localIdentifier = id, virtual = virtual, settings = { Exposure2012 = 0,
+local function photo(id, virtual, path, format)
+    local p = { localIdentifier = id, virtual = virtual, path = path or '/photos/example.CR3',
+        format = format or 'RAW', settings = { Exposure2012 = 0,
         Contrast2012 = 0, Temperature = 5500, Tint = 0, WhiteBalance = 'As Shot' }, snapshots = {} }
     function p:getRawMetadata(key)
-        return ({ isVirtualCopy = self.virtual, fileFormat = 'RAW', path = '/photos/example.CR3', isVideo = false })[key]
+        return ({ isVirtualCopy = self.virtual, fileFormat = self.format, path = self.path, isVideo = false })[key]
     end
-    function p:getFormattedMetadata(key) return key == 'fileName' and 'example.CR3' or 'Working copy' end
+    function p:getFormattedMetadata(key) return key == 'fileName' and self.path:match('[^/]+$') or 'Working copy' end
     function p:getDevelopSettings() return clone(self.settings) end
     function p:checkPhotoAvailability() return true end
     function p:createDevelopSnapshot(name)
@@ -56,11 +61,37 @@ function catalog:createVirtualCopies()
     selected = { copy }
     return { copy }
 end
-function catalog:withWriteAccessDo(_, callback) callback(); return 'executed' end
+function catalog:withWriteAccessDo(_, callback)
+    writeDepth = writeDepth + 1
+    local ok, err = pcall(callback)
+    writeDepth = writeDepth - 1
+    if not ok then error(err, 0) end
+    return 'executed'
+end
+function catalog:findPhotoByPath(path) return importedPhotos[path] end
+function catalog:addPhoto(path)
+    assert(writeDepth > 0, 'addPhoto requires catalog write access')
+    imports, mutations = imports + 1, mutations + 1
+    if failImport then error('native import failed') end
+    local p = photo(100 + imports, false, path, importedFormat)
+    importedPhotos[path] = p
+    return p
+end
+function catalog:setSelectedPhotos(activePhoto, otherSelectedPhotos)
+    assert(writeDepth == 0 and #otherSelectedPhotos == 0, 'select exactly one photo outside write access')
+    photoSelections = photoSelections + 1
+    if not failPhotoSelection then selected = { activePhoto } end
+end
 
 local mocks = {
     LrApplication = { activeCatalog = function() return catalog end, versionString = function() return 'mock' end },
-    LrApplicationView = { getCurrentModuleName = function() return moduleName end },
+    LrApplicationView = { getCurrentModuleName = function() return moduleName end,
+        switchToModule = function(name)
+            assert(name == 'develop' and writeDepth == 0)
+            moduleSwitches = moduleSwitches + 1
+            if not failModuleSwitch then moduleName = name end
+            if switchToOtherPhoto then selected = { original } end
+        end },
     LrDevelopController = {
         getSelectedTool = function() return selectedTool end,
         getSelectedMask = function() return selectedMask end,
@@ -101,8 +132,9 @@ local mocks = {
     LrTasks = { sleep = function(seconds) now = now + seconds * 1000 end },
     LrFileUtils = {
         createAllDirectories = function() return true end,
-        exists = function(path) return files[path] and 'file' or false end,
-        fileAttributes = function(path) return { fileSize = files[path] and 100 or 0 } end,
+        exists = function(path) return files[path] == 'directory' and 'directory' or files[path] and 'file' or false end,
+        fileAttributes = function(path) return { fileSize = type(files[path]) == 'number' and files[path] or files[path] and 100 or 0 } end,
+        resolveAllAliases = function(path) return aliases[path] or path end,
         move = function(source, destination)
             if files[destination] then return false, 'exists' end
             files[destination], files[source] = files[source], nil
@@ -135,7 +167,7 @@ local U = dofile(_PLUGIN.path .. '/Util.lua')
 U.writeJson = function(path, record) assert(not records[path]); records[path] = clone(record); files[path] = true end
 U.readJson = function(path) return clone(records[path]) end
 local O = dofile(_PLUGIN.path .. '/Operations.lua')(U, {
-    bridgeDir = '/bridge', exportRoot = '/renders', checkpoints = '/checkpoints', scratch = '/scratch',
+    bridgeDir = '/bridge', exportRoot = '/renders', importRoot = '/uploads', checkpoints = '/checkpoints', scratch = '/scratch',
 })
 local requestCount, count = 0, 0
 local function request()
@@ -269,4 +301,87 @@ rejects('VERIFY_FAILED', function() O.adjust_mask(maskParams({ local_Exposure = 
 check(failedRequest._mutationStarted, 'unverified native set is marked potentially applied')
 ignoreMaskSet, corruptGlobalOnMaskSet = false, true
 rejects('VERIFY_FAILED', function() O.adjust_mask(maskParams({ local_Exposure = 0.5 }), request()) end)
+-- Uploaded files may enter the catalog only through a dedicated root and UUID directory.
+local uploadDirectory = '/uploads/00000000-0000-4000-8000-000000000001'
+local uploadedPath = uploadDirectory .. '/camera.CR3'
+files[uploadedPath] = 200
+local uploadParams = { path = uploadedPath, filename = 'camera.CR3' }
+local beforeImportMutations, beforeSelections, beforeSwitches = mutations, photoSelections, moduleSwitches
+for _, path in ipairs({ '/outside/camera.CR3', '/uploads-escape/00000000-0000-4000-8000-000000000001/camera.CR3',
+    '/uploads/../camera.CR3', '/uploads/not-a-uuid/camera.CR3', uploadDirectory .. '/nested/camera.CR3',
+    uploadDirectory .. '/../camera.CR3' }) do
+    rejects('INVALID_IMPORT_PATH', function() O.import_photo({ path = path, filename = 'camera.CR3' }, request()) end)
+end
+rejects('INVALID_PARAMS', function() O.import_photo({ path = uploadedPath, filename = '' }, request()) end)
+rejects('INVALID_IMPORT_PATH', function() O.import_photo({ path = uploadedPath, filename = 'other.CR3' }, request()) end)
+rejects('INVALID_IMPORT_PATH', function() O.import_photo({ path = uploadedPath, filename = '../camera.CR3' }, request()) end)
+rejects('UNSUPPORTED_FORMAT', function() O.import_photo({ path = uploadDirectory .. '/image.jpg', filename = 'image.jpg' }, request()) end)
+rejects('IMPORT_FILE_MISSING', function() O.import_photo({ path = uploadDirectory .. '/missing.CR3', filename = 'missing.CR3' }, request()) end)
+files[uploadedPath] = 'directory'
+rejects('IMPORT_FILE_MISSING', function() O.import_photo(uploadParams, request()) end)
+files[uploadedPath] = 0
+rejects('IMPORT_FILE_EMPTY', function() O.import_photo(uploadParams, request()) end)
+files[uploadedPath] = 200
+aliases[uploadedPath] = '/outside/camera.CR3'
+rejects('INVALID_IMPORT_PATH', function() O.import_photo(uploadParams, request()) end)
+aliases[uploadedPath], aliases['/uploads'] = nil, '/outside'
+rejects('INVALID_IMPORT_PATH', function() O.import_photo(uploadParams, request()) end)
+aliases['/uploads'] = nil
+local expiredImport = request(); expiredImport.deadlineAt = now - 1
+rejects('EXPIRED', function() O.import_photo(uploadParams, expiredImport) end)
+check(mutations == beforeImportMutations and photoSelections == beforeSelections and moduleSwitches == beforeSwitches,
+    'invalid or expired upload cannot import, select a photo, or change module')
+selected, moduleName = {}, 'library'
+local importRequest = request()
+local imported = O.import_photo(uploadParams, importRequest)
+local importedPhoto = selected[1]
+check(importRequest._mutationStarted and imports == 1 and #selected == 1
+    and not imported.isVirtualCopy and imported.fileFormat == 'RAW'
+    and imported.name == 'camera.CR3' and imported.path == uploadedPath and moduleName == 'develop',
+    'upload adds one original, selects it exactly, reveals Develop, and returns its descriptor')
+check(importedPhoto.settings.Exposure2012 == 0, 'import applies no development edit to original')
+local importedAgain = O.import_photo(uploadParams, request())
+check(imports == 1 and importedAgain.photoId == imported.photoId, 'duplicate path uses existing catalog original')
+local dngPath = uploadDirectory .. '/image.dng'
+files[dngPath], importedFormat = 400, 'DNG'
+local dng = O.import_photo({ path = dngPath, filename = 'image.dng' }, request())
+check(dng.fileFormat == 'DNG' and not dng.isVirtualCopy, 'DNG extension and metadata are supported')
+importedFormat = 'RAW'
+local namedPath = uploadDirectory .. '/camera sample (2).CR3'
+files[namedPath] = 200
+local named = O.import_photo({ path = namedPath, filename = 'camera sample (2).CR3' }, request())
+check(named.name == 'camera sample (2).CR3', 'safe uploaded filenames may contain spaces and punctuation')
+local virtualPath = uploadDirectory .. '/virtual.CR3'
+files[virtualPath], importedPhotos[virtualPath] = 200, photo(888, true, virtualPath)
+rejects('IMPORT_UNVERIFIED', function() O.import_photo({ path = virtualPath, filename = 'virtual.CR3' }, request()) end)
+local jpegPath = uploadDirectory .. '/disguised.CR3'
+files[jpegPath], importedPhotos[jpegPath] = 200, photo(889, false, jpegPath, 'JPEG')
+rejects('UNSUPPORTED_FORMAT', function() O.import_photo({ path = jpegPath, filename = 'disguised.CR3' }, request()) end)
+local failedPath = uploadDirectory .. '/failure.CR3'
+files[failedPath], failImport = 200, true
+local failedImportRequest = request()
+local ok = pcall(function() O.import_photo({ path = failedPath, filename = 'failure.CR3' }, failedImportRequest) end)
+check(not ok and failedImportRequest._mutationStarted, 'native import failure records uncertain mutation boundary')
+failImport, failPhotoSelection = false, true
+selected = { original }
+local failedSelectionRequest = request()
+rejects('IMPORT_UNVERIFIED', function() O.import_photo(uploadParams, failedSelectionRequest) end)
+check(failedSelectionRequest._mutationStarted and selected[1] == original, 'failed native selection never claims upload is ready')
+failPhotoSelection = false
+selected, moduleName = { importedPhoto }, 'library'
+local originalToken = O.read_state({ photoId = imported.photoId }).stateToken
+beforeSelections, beforeSwitches = photoSelections, moduleSwitches
+rejects('TARGET_CHANGED', function() O.reveal_photo({ photoId = 'wrong' }, request()) end)
+check(photoSelections == beforeSelections and moduleSwitches == beforeSwitches, 'wrong reveal target changes no UI state')
+local revealRequest = request()
+local revealed = O.reveal_photo({ photoId = imported.photoId }, revealRequest)
+check(revealed.photoId == imported.photoId and revealRequest._mutationStarted and moduleName == 'develop'
+    and photoSelections == beforeSelections and O.read_state({ photoId = imported.photoId }).stateToken == originalToken,
+    'reveal enters Develop and preserves original selection/settings')
+moduleName, failModuleSwitch = 'library', true
+local failedRevealRequest = request()
+rejects('REVEAL_UNVERIFIED', function() O.reveal_photo({ photoId = imported.photoId }, failedRevealRequest) end)
+check(failedRevealRequest._mutationStarted, 'unverified module change is marked uncertain')
+failModuleSwitch, switchToOtherPhoto = false, true
+rejects('TARGET_CHANGED', function() O.reveal_photo({ photoId = imported.photoId }, request()) end)
 print('PASS: ' .. count .. ' offline Lua contract checks (mock SDK, not live Lightroom validation).')

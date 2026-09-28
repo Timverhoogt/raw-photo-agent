@@ -2,17 +2,17 @@
 
 **Step-by-step RAW editing in Lightroom Classic, with a checkpoint for every decision.**
 
-[Getting started](#getting-started) · [CLI guide](docs/usage.md) · [Editing workflow](EDITING_WORKFLOW.md) · [Validation](LIVE_VALIDATION.md) · [Contributing](CONTRIBUTING.md)
+[Getting started](#getting-started) · [Local demo](docs/demo.md) · [CLI guide](docs/usage.md) · [Validation](LIVE_VALIDATION.md) · [Contributing](CONTRIBUTING.md)
 
 Raw Photo Agent gives a vision-capable agent a small set of tools to work on a photograph: inspect a preview, make an adjustment, render the result, and keep it or return to an earlier edit. Lightroom develops the original RAW each time. The photographer can compare alternatives and choose the final version.
 
-The current release is a local TypeScript controller and a Lightroom Lua plug-in. A person or an agent session drives the editing loop. No model API key is needed to use the controller.
+The current release includes a local browser demo, a TypeScript controller, and a Lightroom Lua plug-in. In the demo, GPT-6 Astra inspects Lightroom JPEG previews through the signed-in Codex CLI and proposes bounded global edits. The controller validates and applies them through Lightroom's SDK. No separate model API key is required for this setup.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-    raw[Selected RAW] --> copy[Virtual copy]
+    raw[Uploaded or selected RAW] --> copy[Virtual copy]
     copy --> edit[Edit]
     edit --> preview[Render and inspect]
     preview --> keep[Keep checkpoint]
@@ -32,25 +32,34 @@ The controller keeps a SQLite journal alongside the previews. Lightroom owns the
 
 ## Getting started
 
-You need **Node.js 24+** and **Adobe Lightroom Classic** on the same Mac. The native integration has been tested with Classic 15.5.1 on macOS.
+You need **Node.js 24+**, **Adobe Lightroom Classic**, and a signed-in **Codex CLI** on the same Mac. Classic 15.5.1 and Codex CLI 0.153.4 have been checked locally. The configured model must be available to your Codex account. The controller and manual CLI can also be used without a model.
 
 ```sh
 git clone https://github.com/Timverhoogt/raw-photo-agent.git
 cd raw-photo-agent
 npm ci
 node src/cli.ts setup
+codex login status
 ```
 
 1. In Lightroom, open **File → Plug-in Manager → Add** and select the `pluginPath` printed by setup.
 2. Close the manager, run **File → Plug-in Extras → Raw Photo Agent: Start / Status**, and dismiss the dialog.
-3. Select exactly one RAW or DNG and open **Develop**.
+3. Check the bridge and start the local demo. If Codex is not signed in, run `codex login` first.
 
 ```sh
 node src/cli.ts status
-node src/cli.ts selected
+npm run demo
 ```
 
-Use the returned photo ID and exact filename to start a run:
+Open **[http://127.0.0.1:4318](http://127.0.0.1:4318)**. Upload one RAW/DNG of up to **200 MiB**, or choose the photo already selected in Lightroom. Enter the intended look and start. The demo imports an uploaded file if needed, creates a virtual copy and baseline, and alternates visual decisions with fresh Lightroom renders. You can pause at a checkpoint, finish editing, answer creative questions, and choose among retained versions. The final download is an sRGB JPEG with a maximum long edge of **8192 pixels**, without upscaling.
+
+Keep the native Lightroom window beside the browser to watch the actual editor. The page shows rendered previews and public decision notes; it does not stream Lightroom's screen or simulate cursor movement. **Rendered previews and the editing brief are sent through your signed-in Codex service.** RAW uploads, catalog edits, and the run journal stay on this Mac and are excluded from Git. Keep `.runtime/uploads` while Lightroom references its imported files; these are catalog source files, not disposable cache. See the [demo guide](docs/demo.md) for configuration, privacy, and recovery.
+
+After updating the plugin source, rerun `node src/cli.ts setup`, use **Reload Plug-in** in Plug-in Manager, then close the manager and invoke **Start / Status** again. Dismiss its dialog before checking the heartbeat.
+
+## Manual CLI
+
+Select exactly one RAW/DNG in Lightroom, open Develop, and run `node src/cli.ts selected`. Use the returned photo ID and exact filename:
 
 ```sh
 node src/cli.ts start \
@@ -71,22 +80,23 @@ node src/cli.ts edit \
 
 Settings are absolute: `0.25` sets exposure to +0.25 EV. Open the returned `previewPath` before deciding what to do next. For restoration, masks, comparisons, and recovery, see the [CLI guide](docs/usage.md).
 
-To have an agent conduct the session, give it the [editing workflow](EDITING_WORKFLOW.md), the selected filename, shell access, and a way to inspect exported images. The CLI itself does not make aesthetic judgments.
+For a separate agent-driven CLI session, provide the [editing workflow](EDITING_WORKFLOW.md), selected filename, shell access, and a way to inspect exported images. The manual CLI executes commands; the browser demo adds the Codex visual decision loop.
 
 ## Current scope
 
 | Area | Available now |
 | --- | --- |
-| Photo targeting | One explicitly selected RAW or DNG; edits restricted to a virtual copy |
+| Photo targeting | One uploaded or explicitly selected RAW/DNG; guarded native import and edits restricted to a virtual copy |
+| Browser demo | Codex visual decisions, public progress notes, pause/finish, questions, final comparison, and JPEG download |
 | Global adjustments | Tone, white balance, presence, color intensity, sharpening, conventional noise reduction |
-| Existing masks | Explicit mask selection, local exposure, and local texture |
+| Existing masks via manual CLI | Explicit mask selection, local exposure, and local texture; excluded from the autonomous demo |
 | History | Native snapshots, candidate ancestry, state checks, persistent operation journal |
 | Review | Fresh sRGB JPEGs, detail crops, decoded pixel comparison, recorded A/B/C choices |
 | Manual operations | Capture and inspect native edits such as a crop or a UI-created mask |
 
-**Experimental.** One live wildlife-photo trial verified virtual copies, global edits, exports, crop capture, and existing-mask controls. Global snapshot restoration reached an exact pixel match after an additional export. Mask snapshots restored the recorded settings, but strict pixel comparisons retained small differences. General mask rollback reliability remains unresolved. The [validation record](LIVE_VALIDATION.md) separates these observations from simulated tests.
+**Experimental.** A live browser trial completed RAW upload/import, virtual-copy creation, an Astra-proposed global edit, fresh rendering, a second model review, and final JPEG export. Its final selection tested the integration; it was not a new photographer preference. The earlier guided trial also covered crop capture and existing-mask controls. Global snapshot restoration reached an exact pixel match after an additional export; mask snapshots restored recorded settings but retained small pixel differences. General mask rollback and photographic quality across varied images remain unresolved. The [validation record](LIVE_VALIDATION.md) separates these observations from mocked tests.
 
-Automatic mask creation, AI Denoise, a standalone comparison interface, an MCP server, and independent judging agents are future work. The running desktop Lightroom session is required.
+The autonomous demo currently changes **global numeric settings only**. Automatic cropping, mask creation/local editing in the demo, AI Denoise, independent judges, and an MCP server are future work. A running desktop Lightroom session is required. `RPA_MODEL` overrides the default `gpt-6-astra`; `RPA_MAX_EDITS` sets a budget from 1–10 edits, default 6.
 
 ## Development
 
@@ -95,16 +105,17 @@ npm run check
 npm test
 ```
 
-CI checks TypeScript and the controller tests on Node.js 24 and 26, plus the [Lua 5.1 contract tests](plugin/RawPhotoAgent.lrplugin/tests/README.md). Mock tests do not establish native Lightroom behavior.
+CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus **104 [Lua 5.1 contract checks](plugin/RawPhotoAgent.lrplugin/tests/README.md)**. The 81 TypeScript tests include upload guards, session controls, model decision validation, and recovery. Mock tests do not establish native Lightroom or photographic quality.
 
 ```text
-src/          Controller, CLI, SQLite journal, image comparison
+src/          Controller, CLI, demo server/agent, SQLite journal, image comparison
+demo/         Local browser interface
 plugin/       Lightroom Classic plug-in and Lua contract tests
 test/         Controller, transport, persistence, and rendering tests
-docs/         Command reference
+docs/         Demo setup and command reference
 ```
 
-Generated configuration, run data, previews, and photo exports stay out of Git. The controller uses local file communication; any model host you connect has its own image-handling and privacy settings.
+Generated configuration, photos, run data, previews, and exports stay out of Git. The Lightroom bridge uses local files; the Codex visual decision service receives rendered previews. An uncertain native operation retains the session lock and is never retried automatically. A crashed demo session does not resume itself.
 
 ## Further reading
 
@@ -115,3 +126,4 @@ Generated configuration, run data, previews, and photo exports stay out of Git. 
 - [Live validation](LIVE_VALIDATION.md) — what the first RAW trial established and what it did not.
 - [Workflow reference](SIMON_VIDEO_NOTES.md) — notes from Simon d’Entremont’s Lightroom tutorial.
 - [Third-party notices](THIRD_PARTY_NOTICES.md) — attribution for bundled code.
+- [Local demo guide](docs/demo.md) — upload, visual decisions, controls, configuration, and privacy.

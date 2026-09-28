@@ -9,6 +9,7 @@ const UNCERTAIN_REMOTE_CODES = new Set([
   "VERIFY_FAILED", "RESTORE_UNVERIFIED", "OUTCOME_UNKNOWN", "RENDER_STALE",
 ]);
 const MUTATING_OPERATIONS = new Set([
+  "import_photo", "reveal_photo",
   "create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "adjust_mask",
 ]);
 
