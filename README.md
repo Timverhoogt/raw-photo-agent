@@ -11,7 +11,7 @@ The current release is a local TypeScript controller and a Lightroom Lua plug-in
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TD
     raw[Selected RAW] --> copy[Virtual copy]
     copy --> edit[Edit]
     edit --> preview[Render and inspect]
