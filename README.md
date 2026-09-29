@@ -1,8 +1,8 @@
 <h1 align="center">Raw Photo Agent</h1>
 
 <p align="center">
-  An editing agent for Lightroom Classic.<br>
-  <strong>Start with your RAW. Keep the final say.</strong>
+  RAW editing guided by the photograph.<br>
+  <strong>Assess, adjust, compare, refine — in Lightroom Classic.</strong>
 </p>
 
 <p align="center">
@@ -32,13 +32,17 @@
 
 *Guided Lightroom session: tighter framing, restrained tone and color, and a subject-mask lift. Crop and mask creation used Lightroom's interface; the autonomous demo currently makes global adjustments only. [Editing notes →](docs/example.md) · Photo: [Photography Life](https://photographylife.com/).*
 
-Add a RAW, describe the look you want, and watch the agent work through an edit. It inspects Lightroom previews, makes bounded adjustments, and compares the result with earlier versions. You can pause, give feedback, and choose which version to keep.
+Raw Photo Agent aims to bring a photographer's editing process to each image: understand the subject and light, make deliberate adjustments, inspect their effect, and refine the result. The agent chooses the next step from actual previews; Lightroom develops the original RAW. You can pause, give feedback, and choose which version to keep.
 
-### Your photo stays editable
+## Why this workflow
 
-- **A separate working copy.** Edits happen on a Lightroom virtual copy, preserving the source photo and its existing development settings.
-- **A visible editing process.** The browser shows fresh previews and notes on what changed and why. Keep Lightroom beside it to see the native controls update.
-- **A choice at the end.** Compare retained versions, pick a favorite, and download an sRGB JPEG. The virtual copy and snapshots remain in Lightroom.
+- **Go beyond the starting treatment.** Presets are useful starting points, and [adaptive presets](https://www.adobe.com/learn/lightroom-cc/web/optimize-workflow-with-adaptive-presets) can target the subject or sky. The additional work here is to inspect the resulting image, account for your brief, and revise earlier decisions as the edit develops.
+- **Keep the captured photograph as the source.** The agent controls Lightroom development settings. Lightroom renders the RAW for every candidate, and the settings remain editable on a virtual copy. The supported adjustments do not use an image-generation model to synthesize replacement scene content.
+- **Check the tradeoffs.** Opening shadows can reveal a subject and expose noise; extra sharpening can bring out detail and introduce halos. The intended workflow evaluates the visible result against earlier versions, keeps useful changes, and stops when further editing does not help. You choose the final version.
+
+The [editing procedure](EDITING_WORKFLOW.md) follows a photographic sequence: composition and white balance, tonal balance and subject emphasis, color, detail, and final review. Steps can be skipped or revisited. The autonomous demo currently handles the global-adjustment portion; guided sessions can use additional Lightroom tools.
+
+**The goal is a better finished photograph, with native RAW control.** Following this process creates an opportunity for better decisions; it does not establish professional judgment or superior results by itself. That needs blinded comparisons against a well-chosen preset, Lightroom's automatic adjustments, and a direct AI image edit, judged for visual quality, fidelity, time, and cost. See [current validation](LIVE_VALIDATION.md).
 
 ## Getting started
 

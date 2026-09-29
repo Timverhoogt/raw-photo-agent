@@ -1,6 +1,6 @@
 # Agent editing procedure
 
-This procedure uses the local controller in [README.md](README.md). It is executable by an agent with shell tools and image inspection, including an agent running in Codex. It is not a background service or a model prompt already running on an API. Supply your own authorized RAW photo; the repository does not include the validation photo, exports, or runtime evidence. [LIVE_VALIDATION.md](LIVE_VALIDATION.md) summarizes the original guided trial and its limits.
+This procedure uses the local controller in [README.md](README.md). It is executable by an agent with shell tools and image inspection, including an agent running in Codex. It is not a background service or a model prompt already running on an API. Supply your own authorized RAW photo; the repository includes only two [illustrative review previews](docs/example.md), not the source RAW, full-size exports, or runtime journal. [LIVE_VALIDATION.md](LIVE_VALIDATION.md) summarizes the original guided trial and its limits.
 
 ## Establish the target and intention
 
