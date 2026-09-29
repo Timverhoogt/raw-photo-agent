@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file documents bundled third-party source. This project's first-party code is licensed under the MIT License; see [LICENSE](LICENSE). The notices below apply only to the third-party components named here.
+This file documents bundled third-party source and example media. This project's first-party code is licensed under the MIT License; see [LICENSE](LICENSE). The notices below apply to the third-party components and media named here.
 
 ## json.lua
 
@@ -12,6 +12,10 @@ This file documents bundled third-party source. This project's first-party code 
 - Modifications: none. Both bundled files match the corresponding upstream v0.1.2 files byte for byte.
 
 Preserve the copyright and permission notice when redistributing this component.
+
+## README example photograph
+
+The two [README comparison previews](docs/example.md) were rendered in Lightroom from a Photography Life Canon EOS R RAW sample. Credit for the source photograph belongs to [Photography Life](https://photographylife.com/). The example documents a guided editing trial; this repository does not claim ownership of the photograph or grant a license to it. The [example notes](docs/example.md#photo-source) identify the source and adjustments.
 
 ## External runtimes and packages
 
