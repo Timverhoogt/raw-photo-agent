@@ -11,7 +11,7 @@ import { RunStore } from '../store.ts';
 import { PhotoController } from '../controller.ts';
 import { getPaths } from '../config.ts';
 import { FileLogger, errorFields, type Logger } from '../log.ts';
-import { CodexPhotoAgent } from './agent.ts';
+import { createPhotoAgent } from '../agent/index.ts';
 import { DemoEngine, type Upload } from './session.ts';
 
 const runFile = promisify(execFile);
@@ -123,11 +123,14 @@ export async function startDemo(options: { root?: string; port?: number; logger?
   const store = new RunStore(paths.database);
   failedStore = store;
   const controller = new PhotoController(bridge, store, paths.exportRoot);
-  const agent = new CodexPhotoAgent();
+  const agent = createPhotoAgent(process.env, {
+    onAttempt: attempt => { if (!attempt.ok) logger.log('warn', 'decision_attempt_failed', { code: attempt.errorCode, provider: agent.provider, model: agent.model }); },
+  });
   const maxEdits = Number(process.env.RPA_MAX_EDITS ?? 6);
   if (!Number.isInteger(maxEdits) || maxEdits < 1 || maxEdits > 10) throw new Error('RPA_MAX_EDITS must be an integer from 1 to 10.');
   const engine = new DemoEngine(controller, agent, paths.runtime, { maxEdits });
-  let agentStatus = await agent.status();
+  const describeAgent = (status: Awaited<ReturnType<typeof agent.status>>) => ({ ...status, dataLeavesDevice: agent.capabilities.dataLeavesDevice });
+  let agentStatus = describeAgent(await agent.status());
   let connection: { online: boolean; message?: string } = { online: false, message: 'Checking Lightroom…' };
   let refreshing = false;
   const clients = new Set<ServerResponse>();
@@ -191,8 +194,8 @@ export async function startDemo(options: { root?: string; port?: number; logger?
       if (url.pathname === '/api/sessions') {
         await refresh();
         if (!connection.online) throw new Error(connection.message);
-        agentStatus = await agent.status();
-        if (!agentStatus.available) throw new Error(agentStatus.message ?? 'Codex is not ready.');
+        agentStatus = describeAgent(await agent.status());
+        if (!agentStatus.available) throw new Error(agentStatus.message ?? 'The photo agent is not ready.');
         const upload = input.uploadId ? await loadUpload(uploadRoot,textValue(input.uploadId,'uploadId')) : undefined;
         engine.start({intent:textValue(input.intent,'intent'), upload, useSelected:input.useSelected === true});
         json(res,202,{ok:true}); return;
@@ -215,8 +218,8 @@ export async function startDemo(options: { root?: string; port?: number; logger?
   boundPort = (server.address() as {port:number}).port;
   const timer = setInterval(() => { void refresh(); for (const client of [...clients]) writeClient(client, ': heartbeat\n\n'); },3000);
   timer.unref();
-  const authTimer = setInterval(() => { void agent.status().then(result => { agentStatus=result; broadcast(); }).catch(error => logger.log('warn', 'agent_status_failed', errorFields(error))); },60000); authTimer.unref();
-  logger.log('info', 'server_started', { port: boundPort, agent: agentStatus.available ? 'ready' : 'unavailable', bridgeOnline: connection.online });
+  const authTimer = setInterval(() => { void agent.status().then(result => { agentStatus=describeAgent(result); broadcast(); }).catch(error => logger.log('warn', 'agent_status_failed', errorFields(error))); },60000); authTimer.unref();
+  logger.log('info', 'server_started', { port: boundPort, provider: agent.provider, model: agent.model, agent: agentStatus.available ? 'ready' : 'unavailable', bridgeOnline: connection.online });
   return { server,engine,url:`http://127.0.0.1:${boundPort}`, close:async () => {
     clearInterval(timer); clearInterval(authTimer); await engine.shutdown();
     for(const client of clients) client.end();

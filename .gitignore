@@ -1,6 +1,7 @@
 node_modules/
 .runtime/
 results/
+fixtures/*/
 *.log
 .DS_Store
 .env
