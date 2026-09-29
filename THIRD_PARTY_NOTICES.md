@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file documents bundled third-party source. It does not assign a license to this project's first-party code.
+This file documents bundled third-party source. This project's first-party code is licensed under the MIT License; see [LICENSE](LICENSE). The notices below apply only to the third-party components named here.
 
 ## json.lua
 

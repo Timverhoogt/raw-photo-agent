@@ -157,6 +157,29 @@ ${JSON.stringify(data)}
 `;
 }
 
+/** Codex CLI the flags below were verified against; see scripts/check-codex-cli.ts. */
+export const CODEX_MIN_VERSION = '0.153.4';
+export const CODEX_ENABLED_FEATURE = 'skip_host_skill_discovery';
+export const CODEX_DISABLED_FEATURES: readonly string[] = [
+  'shell_tool', 'unified_exec', 'shell_snapshot', 'apps', 'plugins', 'remote_plugin',
+  'hooks', 'multi_agent', 'multi_agent_v2', 'browser_use', 'browser_use_external', 'computer_use',
+  'in_app_browser', 'in_app_local_automation', 'code_mode', 'code_mode_host', 'image_generation',
+  'view_image', 'workspace_dependencies', 'skill_search', 'skill_mcp_dependency_install', 'goals', 'memories', 'sleep_tool',
+];
+
+/** Extracts "x.y.z" from `codex --version` output such as "codex-cli 0.153.4". */
+export function parseCodexVersion(output: string): [number, number, number] | undefined {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
+}
+export function isSupportedCodexVersion(version: readonly number[], minimum = CODEX_MIN_VERSION): boolean {
+  const floor = parseCodexVersion(minimum)!;
+  for (let i = 0; i < 3; i++) {
+    if (version[i]! !== floor[i]!) return version[i]! > floor[i]!;
+  }
+  return true;
+}
+
 export interface CodexArgsInput { model: string; cwd: string; schemaPath: string; outputPath: string; images: string[] }
 export function buildCodexArgs(input: CodexArgsInput): string[] {
   const args = ['exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check',
@@ -164,15 +187,10 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
     '--output-schema', input.schemaPath, '--output-last-message', input.outputPath,
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0',
     '-c', 'history.persistence="none"'];
-  // Feature names are exposed by Codex CLI 0.153.4. Inputs are attached directly;
-  // no executable, browser, plug-in, connector, or image-generation tools are needed.
-  for (const feature of ['shell_tool', 'unified_exec', 'shell_snapshot', 'apps', 'plugins', 'remote_plugin',
-    'hooks', 'multi_agent', 'multi_agent_v2', 'browser_use', 'browser_use_external', 'computer_use',
-    'in_app_browser', 'in_app_local_automation', 'code_mode', 'code_mode_host', 'image_generation',
-    'view_image', 'workspace_dependencies', 'skill_search', 'skill_mcp_dependency_install', 'goals', 'memories', 'sleep_tool']) {
-    args.push('--disable', feature);
-  }
-  args.push('--enable', 'skip_host_skill_discovery');
+  // Inputs are attached directly; no executable, browser, plug-in, connector,
+  // or image-generation tools are needed.
+  for (const feature of CODEX_DISABLED_FEATURES) args.push('--disable', feature);
+  args.push('--enable', CODEX_ENABLED_FEATURE);
   for (const image of input.images) args.push('--image', image);
   args.push('-');
   return args;
@@ -259,6 +277,14 @@ export class CodexPhotoAgent {
   async status(): Promise<{ available: boolean; model: string; provider: string; message?: string }> {
     const result = { available: false, model: this.model, provider: 'codex-cli' };
     try {
+      const versionProbe = await this.runner(this.binary, ['--version'], {
+        cwd: tmpdir(), timeoutMs: 5_000, maxOutputBytes: 16_384, captureOutput: true,
+      });
+      const version = versionProbe.code === 0 ? parseCodexVersion(versionProbe.stdout) : undefined;
+      if (!version) return { ...result, message: 'Could not determine the Codex CLI version. Install Codex CLI ' + CODEX_MIN_VERSION + ' or newer.' };
+      if (!isSupportedCodexVersion(version)) {
+        return { ...result, message: `Codex CLI ${version.join('.')} is older than the tested ${CODEX_MIN_VERSION}. Update it before starting the photo agent.` };
+      }
       const probe = await this.runner(this.binary, ['login', 'status'], {
         cwd: tmpdir(), timeoutMs: 5_000, maxOutputBytes: 16_384, captureOutput: true,
       });

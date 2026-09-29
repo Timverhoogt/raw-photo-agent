@@ -71,6 +71,16 @@ RAW files, Lightroom state, SQLite records, run logs, preview JPEGs, and final e
 
 Each decision uses an ephemeral CLI invocation and a temporary working directory. Temporary decision files are removed after the call; the local candidate journal and exported previews remain for comparison and recovery. These controls are not a claim about server-side retention.
 
+## Logs and shutdown
+
+The server appends JSON Lines to `.runtime/logs/demo.log` (mode `0600`, one rotated generation at 5 MiB). It records lifecycle events, bridge online/offline changes, session status changes, rejected requests, and uncaught errors. It never records photo content, the editing brief, previews, or model output.
+
+`SIGINT`/`SIGTERM` stop the server gracefully and force the process to exit if shutdown takes longer than 10 seconds. An uncaught exception or unhandled rejection is logged and triggers the same shutdown, then exit code 1. Shutdown marks an in-flight session as interrupted and keeps `session.lock`; it never clears an uncertain Lightroom operation.
+
+## Codex CLI compatibility
+
+At startup and every minute, the demo runs `codex --version` and refuses to start a session on a CLI older than **0.153.4**, the version its `--disable` feature list was verified against. Newer versions are allowed. Run `npm run check:codex` to confirm that the installed CLI still knows every flag and feature name the demo passes (CI runs it against 0.153.4 and the latest release).
+
 ## Interruptions and recovery
 
 One demo server owns the runtime, and one editing session owns `session.lock`, including pauses and pending user choices. This prevents a second demo or a mutating CLI command from taking over the active session.

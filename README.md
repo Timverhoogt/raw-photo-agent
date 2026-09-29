@@ -103,9 +103,10 @@ The autonomous demo currently changes **global numeric settings only**. Automati
 ```sh
 npm run check
 npm test
+npm run check:codex   # needs the Codex CLI on PATH
 ```
 
-CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus **104 [Lua 5.1 contract checks](plugin/RawPhotoAgent.lrplugin/tests/README.md)**. The 81 TypeScript tests include upload guards, session controls, model decision validation, and recovery. Mock tests do not establish native Lightroom or photographic quality.
+CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus **104 [Lua 5.1 contract checks](plugin/RawPhotoAgent.lrplugin/tests/README.md)**. The 88 TypeScript tests include upload guards, session controls, model decision validation, and recovery. Mock tests do not establish native Lightroom or photographic quality.
 
 ```text
 src/          Controller, CLI, demo server/agent, SQLite journal, image comparison
@@ -116,6 +117,10 @@ docs/         Demo setup and command reference
 ```
 
 Generated configuration, photos, run data, previews, and exports stay out of Git. The Lightroom bridge uses local files; the Codex visual decision service receives rendered previews. An uncertain native operation retains the session lock and is never retried automatically. A crashed demo session does not resume itself.
+
+## License
+
+MIT; see [LICENSE](LICENSE). Bundled third-party components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Further reading
 

@@ -2,6 +2,7 @@
   "name": "raw-photo-agent",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "A local, reversible Lightroom Classic editing controller",
   "engines": {
@@ -10,6 +11,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
+    "check:codex": "node scripts/check-codex-cli.ts",
     "cli": "node src/cli.ts",
     "demo": "node src/demo/server.ts"
   },
