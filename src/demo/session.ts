@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Photo, PhotoController } from '../controller.ts';
 import type { Candidate } from '../store.ts';
 import { verifyRestoredRendering } from '../images.ts';
-import type { Decision, DecisionInput } from './agent.ts';
+import type { Decision, DecisionInput } from '../agent/core.ts';
 
 export type DemoStatus = 'preparing' | 'running' | 'pausing' | 'paused' | 'awaiting_answer' | 'awaiting_choice' | 'completed' | 'error';
 export interface DemoEvent { id: string; at: string; type: string; title: string; text: string; changes?: Record<string, number> }

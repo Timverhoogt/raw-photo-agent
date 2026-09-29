@@ -3,9 +3,10 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { ADJUSTMENT_RANGES, CodexPhotoAgent, PhotoAgentError, buildCodexArgs, buildDecisionPrompt,
-  isSupportedCodexVersion, parseCodexVersion, parseDecision, runBoundedProcess, selectDecisionImages } from '../src/demo/agent.ts';
-import type { DecisionInput, ProcessRunner } from '../src/demo/agent.ts';
+import { ADJUSTMENT_RANGES, PhotoAgentError, buildDecisionPrompt, decisionSchema, parseDecision, selectDecisionImages } from '../src/agent/core.ts';
+import { CodexPhotoAgent, buildCodexArgs, isSupportedCodexVersion, parseCodexVersion, runBoundedProcess } from '../src/agent/codex-cli.ts';
+import type { DecisionInput } from '../src/agent/core.ts';
+import type { ProcessRunner } from '../src/agent/codex-cli.ts';
 
 const input = (): DecisionInput => ({ intent: 'Keep the bird natural, with clear feather detail.',
   currentCandidateId: 'current', remainingEdits: 3, history: [], feedback: [],
@@ -49,8 +50,8 @@ test('restore, ask and finish decisions cannot smuggle edits or invalid targets'
   assert.equal(parseDecision({ ...restore, action: 'finish', candidateId: 'current' }, input()).action, 'finish');
 });
 
-test('schema allows only supported nullable numeric fields and keeps every output field required', async () => {
-  const schema = JSON.parse(await readFile(new URL('../src/demo/decision.schema.json', import.meta.url), 'utf8'));
+test('schema allows only supported nullable numeric fields and keeps every output field required', () => {
+  const schema = decisionSchema() as any;
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(new Set(schema.required), new Set(Object.keys(schema.properties)));
   const sliders = schema.properties.adjustments;

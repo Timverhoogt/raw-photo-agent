@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import {
   CODEX_DISABLED_FEATURES, CODEX_ENABLED_FEATURE, CODEX_MIN_VERSION,
   buildCodexArgs, isSupportedCodexVersion, parseCodexVersion,
-} from '../src/demo/agent.ts';
+} from '../src/agent/codex-cli.ts';
 
 const binary = process.env.RPA_CODEX_BIN ?? 'codex';
 const run = (...args: string[]) => execFileSync(binary, args, { encoding: 'utf8', timeout: 30_000 });

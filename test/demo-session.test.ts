@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { RunStore } from '../src/store.ts';
 import { PhotoController } from '../src/controller.ts';
 import { DemoEngine } from '../src/demo/session.ts';
-import type { Decision } from '../src/demo/agent.ts';
+import type { Decision } from '../src/agent/core.ts';
 
 function decision(overrides: Partial<Decision> = {}): Decision { return {action:'finish',title:'Ready',observation:'The visible detail is retained.',reason:'Compare the versions.',adjustments:{},candidateId:null,question:null,options:[],...overrides}; }
 function fixture(agent: {decide: (...args:any[])=>Promise<Decision>}, options: {failApply?:boolean; maxEdits?:number} = {}) {
