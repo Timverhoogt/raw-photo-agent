@@ -73,7 +73,7 @@ Open **[localhost:4318](http://127.0.0.1:4318)**. Upload a RAW/DNG (up to 200 Mi
 
 The vision model proposes a supported action. The TypeScript controller validates it, the Lua plug-in applies it through Lightroom's SDK, and Lightroom renders the RAW again. Each candidate records its settings and a native snapshot, so the agent can attempt to return to an earlier checkpoint. A state or pixel mismatch stops the session for inspection.
 
-The demo uses GPT-6 Astra through the signed-in Codex CLI by default. The [manual CLI](docs/usage.md) also works without a model. For agent-led sessions outside the browser, use the [editing workflow](EDITING_WORKFLOW.md).
+The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVIDER` can switch it to the Claude API or an OpenAI-compatible endpoint, including a local vision model; only Codex has been checked in a live session. [Evaluate a model](docs/evaluation.md) against measurable thresholds before using it. The [manual CLI](docs/usage.md) also works without a model. For agent-led sessions outside the browser, use the [editing workflow](EDITING_WORKFLOW.md).
 
 ## Current status
 
@@ -101,6 +101,7 @@ The manual workflow can capture crops and adjust an existing mask. **Exact mask 
 npm run check
 npm test
 npm run check:codex   # needs the Codex CLI on PATH
+npm run eval -- run --dry-run   # plan a model evaluation; see docs/evaluation.md
 ```
 
 CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus the [Lua 5.1 contract tests](plugin/RawPhotoAgent.lrplugin/tests/README.md). Mocked tests do not establish native Lightroom behavior or photographic quality.

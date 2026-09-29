@@ -12,6 +12,7 @@
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "check:codex": "node scripts/check-codex-cli.ts",
+    "eval": "node scripts/eval.ts",
     "cli": "node src/cli.ts",
     "demo": "node src/demo/server.ts"
   },

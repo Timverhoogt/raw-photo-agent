@@ -67,7 +67,8 @@ export class OpenAICompatibleTransport implements ModelTransport {
       if (response.status === 401 || response.status === 403) return { ...result, message: 'The model endpoint rejected the API key (RPA_API_KEY).' };
       if (!response.ok) return { ...result, message: `The model endpoint returned HTTP ${response.status}.` };
       const body = await response.json() as { data?: Array<{ id?: unknown }> };
-      if (Array.isArray(body.data) && body.data.length && !body.data.some(entry => entry.id === this.model)) {
+      // Ollama lists `name:latest` but also accepts the bare name.
+      if (Array.isArray(body.data) && body.data.length && !body.data.some(entry => entry.id === this.model || entry.id === `${this.model}:latest`)) {
         return { ...result, message: `The endpoint does not list model ${this.model}.` };
       }
       return { ...result, available: true };

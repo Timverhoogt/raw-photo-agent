@@ -56,12 +56,13 @@ RPA_MODEL=gpt-6-astra RPA_MAX_EDITS=4 npm run demo
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RPA_MODEL` | `gpt-6-astra` | Model requested from the signed-in Codex CLI; it must support image input and be available to the account. |
+| `RPA_PROVIDER` | `codex-cli` | `codex-cli`, `anthropic` or `openai-compatible`; see [model evaluation](evaluation.md#providers) for provider settings. |
+| `RPA_MODEL` | `gpt-6-astra` | Model requested from the provider; it must support image input and be available to the account. Anthropic defaults to `claude-opus-5-5`. |
 | `RPA_MAX_EDITS` | `6` | Global editing budget, integer 1–10. |
 | `RPA_PORT` | `4318` | Local HTTP port; the server binds to `127.0.0.1`. |
 | `RPA_CODEX_BIN` | `codex` | Executable path/name when the CLI is not on the server's `PATH`. |
 
-Model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
+With the default provider, model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The other providers send the previews and the brief in one API request with no tools. If a decision fails validation, the agent asks the model once more with the validator's error (`RPA_REPAIR_ATTEMPTS`); this never touches Lightroom. Only Codex has been checked in a live Lightroom session. Run the [model evaluation](evaluation.md) before relying on another provider. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
 
 ## Local data and model requests
 
