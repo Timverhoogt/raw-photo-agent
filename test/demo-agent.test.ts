@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ADJUSTMENT_RANGES, CodexPhotoAgent, PhotoAgentError, buildCodexArgs, buildDecisionPrompt,
-  parseDecision, runBoundedProcess, selectDecisionImages } from '../src/demo/agent.ts';
+  isSupportedCodexVersion, parseCodexVersion, parseDecision, runBoundedProcess, selectDecisionImages } from '../src/demo/agent.ts';
 import type { DecisionInput, ProcessRunner } from '../src/demo/agent.ts';
 
 const input = (): DecisionInput => ({ intent: 'Keep the bird natural, with clear feather detail.',
@@ -98,6 +98,7 @@ test('provider reads only final output, cleans isolated files and exposes no sta
   value.candidates = value.candidates.map(candidate => ({ ...candidate, previewPath: preview }));
   let workingDir = '';
   const runner: ProcessRunner = async (_binary, args, options) => {
+    if (args[0] === '--version') return { code: 0, stdout: 'codex-cli 0.153.4\n', stderr: '' };
     if (args[0] === 'login') return { code: 0, stdout: '', stderr: 'Logged in using API key: never-display-this' };
     workingDir = options.cwd;
     assert.notEqual(workingDir, process.cwd());
@@ -152,4 +153,29 @@ test('aborting a stubborn child kills its process before the runner rejects', as
   controller.abort();
   await assert.rejects(task, (error: unknown) => error instanceof PhotoAgentError && error.code === 'ABORTED');
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+});
+
+test('version parsing and minimum comparison', () => {
+  assert.deepEqual(parseCodexVersion('codex-cli 0.153.4\n'), [0, 153, 4]);
+  assert.equal(parseCodexVersion('no version'), undefined);
+  assert.equal(isSupportedCodexVersion([0, 153, 4]), true);
+  assert.equal(isSupportedCodexVersion([0, 158, 0]), true);
+  assert.equal(isSupportedCodexVersion([1, 0, 0]), true);
+  assert.equal(isSupportedCodexVersion([0, 153, 3]), false);
+  assert.equal(isSupportedCodexVersion([0, 99, 9]), false);
+});
+
+test('status refuses an old or unreadable Codex CLI before checking login', async () => {
+  const calls: string[] = [];
+  const make = (stdout: string, code = 0) => new CodexPhotoAgent({ runner: async (_b, args) => {
+    calls.push(args[0]!); return { code, stdout, stderr: '' };
+  } });
+  const old = await make('codex-cli 0.150.0').status();
+  assert.equal(old.available, false);
+  assert.match(old.message ?? '', /older than the tested 0\.153\.4/);
+  const unreadable = await make('garbage').status();
+  assert.equal(unreadable.available, false);
+  assert.match(unreadable.message ?? '', /version/);
+  assert.equal((await make('', 1).status()).available, false);
+  assert.equal(calls.includes('login'), false);
 });
