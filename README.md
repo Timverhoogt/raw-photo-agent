@@ -91,9 +91,22 @@ The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVI
 | Progress notes, elapsed review time, safe review retry, pause/finish, creative questions, and final selection | Independent judging agents and batch editing |
 | Agent-requested detail inspection and synchronized before/after regions | Automatic crop mapping across different compositions |
 
-The manual workflow can capture crops and adjust an existing mask. Native subject/background mask creation and a guarded existing-mask agent loop are implemented for controlled validation; autonomous demo masking stays disabled. **Exact mask rollback remains unresolved**, and photographic quality needs broader evaluation. See the [restoration experiments](docs/restoration-validation.md), [render repeatability controls](docs/render-repeatability.md), [live validation record](LIVE_VALIDATION.md), and [roadmap](ROADMAP.md).
+The manual workflow can capture crops and adjust an existing mask. Native subject/background mask creation and a guarded existing-mask agent loop are implemented for controlled validation; **autonomous demo masking stays disabled**. Native settings restored exactly in the recorded trials, but **exact pixel recovery remains unverified**. See the [restoration experiments](docs/restoration-validation.md), [render repeatability controls](docs/render-repeatability.md), [live validation record](LIVE_VALIDATION.md), and [roadmap](ROADMAP.md).
 
 The local [RAW quality evaluation](docs/evaluation.md) indexes RAW/XMP hashes, runs separate working copies, produces blinded comparison pages, and records explicit photographer preferences. Completed exports establish integration behavior; they do not establish a quality win without actual photographer votes.
+
+### Progress — 1 October 2026
+
+| Roadmap work | Verified progress |
+| --- | --- |
+| Provider support and detail inspection | Integrated provider selection, matched detail crops, and evidence-capacity checks. [Model evaluation](docs/model-evaluation.md) and [RAW quality evaluation](docs/evaluation.md) have separate workflows. |
+| Lightroom recovery guards | Added bounded copy-selection waits, strict import-state checks, and one to three measured edit/restore cycles with explicit mask selection before each cycle. |
+| Native restoration trials | Completed subject and background trials: **60 TIFFs, 206 pixel comparisons, and eight exact native-settings restorations**. Original and staged RAW/XMP hashes remained unchanged. |
+| Automated validation | **196 Node tests and 199 Lua 5.1 checks passed**, alongside TypeScript and Codex CLI compatibility checks. CI covers Node.js 24 and 26. |
+
+All 206 pixel comparisons were nonexact, including unchanged-render controls; every edit/restore cycle therefore remains unverified for pixel recovery. The [trial results and limits](docs/restoration-validation.md#three-cycle-live-trials--1-october-2026) retain the evidence for each scene. These trials do not establish a photographic quality improvement.
+
+Next on the [roadmap](ROADMAP.md): diagnose the earlier import-state drift, test deliberately retained native edit residuals, broaden scene and mask-boundary checks, and collect blinded photographer votes. Autonomous local editing remains gated on recovery evidence; composition assistance, independent critique, and batch editing remain later milestones.
 
 ## Documentation & development
 
