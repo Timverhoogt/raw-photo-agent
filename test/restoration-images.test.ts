@@ -132,3 +132,34 @@ test('rejects mismatched geometry, depth, profile, orientation, and stale file p
   const valid = await compareLosslessTiff(before, before);
   assert.equal((await compareLosslessTiff(before, before, { expectedBeforeSha256: valid.before.sha256, expectedAfterSha256: valid.after.sha256 })).pixelsIdentical, true);
 });
+
+test('signed residual sweeps detect one-code defects across tile and image boundaries', async t => {
+  const { directory, icc } = await fixture(t);
+  const before = join(directory, 'before.tif'); const after = join(directory, 'after.tif');
+  const width = 130; const height = 130;
+  const baseline = new Uint16Array(width * height * 3).fill(32768);
+  await writeFile(before, nativeTiff(width, height, baseline, icc));
+  const regions = [
+    { left: 129, top: 129, width: 1, height: 1 },
+    { left: 129, top: 0, width: 1, height: 130 },
+    { left: 63, top: 63, width: 3, height: 3 },
+  ];
+  for (const region of regions) for (const residual of [-256, -1, 1, 256]) {
+    const values = baseline.slice(); const pixels = region.width * region.height;
+    for (let y = region.top; y < region.top + region.height; y++) for (let x = region.left; x < region.left + region.width; x++) {
+      // Opposing red/blue residuals must not cancel in aggregate measurements.
+      values[(y * width + x) * 3]! += residual;
+      values[(y * width + x) * 3 + 2]! -= residual;
+    }
+    await writeFile(after, nativeTiff(width, height, values, icc));
+    const result = await compareLosslessTiff(before, after);
+    assert.equal(result.comparable, true); assert.equal(result.pixelsIdentical, false);
+    assert.equal(result.metrics?.changedPixels, pixels); assert.equal(result.metrics?.changedChannels, pixels * 2);
+    assert.equal(result.maximumChannelDifference, Math.abs(residual));
+    assert.equal(result.metrics?.absoluteDifferenceSum, pixels * 2 * Math.abs(residual));
+    assert.deepEqual(result.spatial?.boundingBox, region);
+    assert.equal(result.spatial?.longestHorizontalRun, region.width); assert.equal(result.spatial?.longestVerticalRun, region.height);
+    assert.deepEqual(result.histogram, [{ difference: 0, channels: width * height * 3 - pixels * 2 }, { difference: Math.abs(residual), channels: pixels * 2 }]);
+    assert.equal(result.spatial?.tiles.reduce((sum, tile) => sum + tile.changedPixels, 0), pixels);
+  }
+});

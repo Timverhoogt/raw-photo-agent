@@ -292,9 +292,11 @@ return function(U, config)
         end
         local untilTime = math.min(request.deadlineAt, U.now() + 5000)
         repeat
+            U.checkDeadline(request)
             target(id, false, false)
             expected(catalog, photo, before.stateToken)
             if LrApplicationView.getCurrentModuleName() == 'develop' then
+                U.checkDeadline(request)
                 return describe(catalog, photo)
             end
             if U.now() >= untilTime then break end
@@ -385,6 +387,7 @@ return function(U, config)
         local id = photoId(catalog, photo)
         local untilTime = math.min(request.deadlineAt, U.now() + 5000)
         repeat
+            U.checkDeadline(request)
             sameCatalog(catalog)
             local selected = selection(catalog)
             if #selected == 1 and photoId(catalog, selected[1]) == id then
@@ -448,18 +451,42 @@ return function(U, config)
         end
         local copy = copies[1]
         local id = photoId(catalog, copy)
-        target(id, true, false)
-        if id == params.photoId or copy:getRawMetadata('path') ~= source:getRawMetadata('path') then
+        if id == params.photoId or copy:getRawMetadata('isVirtualCopy') ~= true
+            or copy:getRawMetadata('path') ~= source:getRawMetadata('path') then
             U.fail('VERIFY_FAILED', 'New virtual copy identity did not match its source.')
         end
-        if state(catalog, source).stateToken ~= original.stateToken then
-            U.fail('VERIFY_FAILED', 'The source state changed while creating the copy; inspect Lightroom.')
-        end
-        local copyState = state(catalog, copy)
-        if U.hash(copyState.settings) ~= U.hash(original.settings) then
-            U.fail('VERIFY_FAILED', 'The new copy settings differ from the source; inspect Lightroom.')
-        end
-        return { photoId = id, sourcePhotoId = params.photoId, photo = describe(catalog, copy), state = copyState }
+        -- The SDK can return the new copy before its selection is observable.
+        -- Only observe that one creation: never reselect or create another copy.
+        -- Waiting is permitted while the exact source remains selected; any
+        -- other selection or settings change is an uncertain outcome, not a retry.
+        local untilTime = math.min(request.deadlineAt, U.now() + 5000)
+        repeat
+            U.checkDeadline(request)
+            sameCatalog(catalog)
+            if state(catalog, source).stateToken ~= original.stateToken then
+                U.fail('VERIFY_FAILED', 'The source state changed while creating the copy; inspect Lightroom.')
+            end
+            local copyState = state(catalog, copy)
+            if U.hash(copyState.settings) ~= U.hash(original.settings) then
+                U.fail('VERIFY_FAILED', 'The new copy settings differ from the source; inspect Lightroom.')
+            end
+            local selected = selection(catalog)
+            if #selected ~= 1 then
+                U.fail('SELECTION_REQUIRED', 'Selection changed while waiting for the new copy; inspect Lightroom before recovery.')
+            end
+            local selectedId = photoId(catalog, selected[1])
+            if selectedId == id then
+                target(id, true, false)
+                U.checkDeadline(request)
+                return { photoId = id, sourcePhotoId = params.photoId, photo = describe(catalog, copy), state = copyState }
+            end
+            if selectedId ~= params.photoId then
+                U.fail('TARGET_CHANGED', 'Another photo was selected while waiting for the new copy; no selection was changed.')
+            end
+            if U.now() >= untilTime then break end
+            LrTasks.sleep(0.1)
+        until false
+        U.fail('COPY_SELECTION_UNVERIFIED', 'The new copy was created but its selection did not verify; inspect Lightroom before recovery. No retry was attempted.')
     end
 
     function O.checkpoint(params, request)

@@ -1,10 +1,12 @@
 # Raw Photo Agent roadmap
 
-Updated 28 September 2026. The goal is a Lightroom assistant that makes image-specific editing decisions, checks the result, can backtrack, and leaves the photographer with an editable result they prefer.
+Updated 1 October 2026. The goal is a Lightroom assistant that makes image-specific editing decisions, checks the result, can backtrack, and leaves the photographer with an editable result they prefer.
 
 ## Working today
 
 One RAW upload or explicit Lightroom selection; a protected original and working virtual copy; iterative global edits; agent-requested detail inspection; matching before/after crops; checkpoints; public progress notes; review retry; final choice and JPEG export. Repeatable local quality evaluation now indexes RAW/XMP hashes, runs separate working copies, creates blinded comparison pages, and records explicit photographer preferences. See [evaluation usage](docs/evaluation.md) and separate live Lightroom evidence in [LIVE_VALIDATION.md](LIVE_VALIDATION.md). Automated checks establish integration behavior, not general photographic quality.
+
+The merged provider work now shares these decision and detail safeguards across Codex, Anthropic, and OpenAI-compatible transports. The default stays Codex. Requests retain every matching crop and overview; API preview limits do not shrink detail crops. The separate [model evaluation](docs/model-evaluation.md) measures decision validity, perception and restraint; unsupported detail-only fixes stop at planning rather than being scored as model failures. Real-provider quality still needs measurement.
 
 ## Next milestone: selective editing with verified recovery
 
@@ -18,7 +20,9 @@ A fixed [checkpoint/no-op restore pilot](docs/render-repeatability.md) is now im
 
 The approved restarted Auto, GPU Off, and restored-Auto conditions have completed without concurrent automated tests: twenty-seven TIFFs, forty-five nonexact comparisons, and exact settings against the same explicitly recorded post-restart baseline. Turning graphics processing Off did not eliminate variation. Both original graphics preferences are restored to Auto and reverified. The first final-Auto attempt stopped during copy-selection verification before any export; its copy and evidence were preserved and reconciled after unlock. One separate replacement experiment completed, with its extra copy/selection cycle and longer preparation recorded. See [campaign details](docs/render-repeatability.md#restarted-auto--off-campaign-28-september-2026).
 
-Consumed bridge responses are now retained as original evidence; this reliability change was made after the campaign exports. Next, investigate asynchronous copy selection and the import-time settings change observed on one corpus file, then run repeated edit/restore cycles. Restart also added an empty field to native settings readback; that difference remains explicit rather than normalized away. Preserve exact native-state checks and every observed pixel difference; nonexact comparisons remain unverified. Expand deliberate residual and boundary tests before proposing a calibrated recovery rule or enabling autonomous local edits.
+Consumed bridge responses are retained as original evidence. Virtual-copy creation now observes the source-to-copy selection transition for at most five seconds after one SDK creation, without retrying creation or forcing selection. Exact source/copy settings, catalog identity and deadline checks remain mandatory; unrelated selection stops the operation. Import/Develop waits also enforce deadlines. Import-time state drift still stops with `STALE_STATE`; its cause is not established. Restart also added an empty field to native settings readback; that difference remains explicit rather than normalized away.
+
+The restoration runner now supports one to three fixed edit/restore cycles against the same masked checkpoint, with separate evidence and failure status per cycle. It explicitly reselects the verified mask because snapshot restoration may clear that UI selection. Automated failure controls cover tiny native exposure/texture residuals, unrelated settings and component changes, pixel residuals despite matching settings, and signed one-code-value boundary changes. Native-state checks and every observed pixel difference remain exact; nonexact comparisons remain unverified. Repeated native trials, broader scene coverage, deliberate native residuals, and calibrated boundary inspection remain necessary before changing any recovery gate or enabling autonomous local edits.
 
 Done when one selected RAW can undergo a subject/background edit, boundary inspection, backtracking, and candidate comparison with verified targeting and recovery. Mask creation/deletion and existing-mask parameter restoration require separate evidence.
 

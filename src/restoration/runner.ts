@@ -20,22 +20,29 @@ type Phase = 'baseline-control' | 'masked-control' | 'edited' | 'restored-mask' 
 interface MaskContext { selectedMaskId: string; parameters: Record<string, { value: number; min: number; max: number }> }
 interface MaskResult { state: PhotoState; maskContext: MaskContext; maskId: string; maskKind: MaskKind; completion: string }
 export interface RestorationRender {
-  id: string; phase: Phase; ordinal: number; path: string; sha256: string;
+  id: string; phase: Phase; ordinal: number; cycle?: number; path: string; sha256: string;
   startedAt: string; finishedAt: string; durationMs: number; photoId: string; runId: string; candidateId: string;
   stateToken: string; settings: Record<string, unknown>; sourceSha256: string;
   recipe: { format: 'TIFF'; bitDepth: 16; colorSpace: 'sRGB'; outputSharpening: false; maxEdge: number };
 }
 export interface RestorationComparison {
   id: string; kind: 'unchanged-baseline' | 'unchanged-masked' | 'local-effect' | 'local-restoration' | 'unchanged-restored' | 'precreation-restoration';
-  beforeId: string; afterId: string; measuredAt: string; result: Comparison;
+  beforeId: string; afterId: string; cycle?: number; measuredAt: string; result: Comparison;
+}
+interface ExposureEvidence { before: number; requested: number; observed: number; min: number; max: number }
+export interface RestorationCycle {
+  cycle: number; status: 'running' | 'complete' | 'interrupted'; startedAt: string; finishedAt?: string;
+  editedId?: string; exposure?: ExposureEvidence;
 }
 export interface RestorationCase {
   assetId: string; name: string; status: 'pending' | 'running' | 'complete' | 'interrupted';
   startedAt?: string; finishedAt?: string; runId?: string; sourcePhotoId?: string; workingPhotoId?: string;
   stagedPath?: string; sourceSha256: string; sourceSidecars: Array<{ path: string; sha256: string }>;
   baselineId?: string; maskedId?: string; editedId?: string; maskId?: string; maskCompletion?: string;
-  exposure?: { before: number; requested: number; observed: number; min: number; max: number };
-  settingsRestorations: Array<{ phase: 'local' | 'precreation'; at: string; expectedStateToken: string; actualStateToken: string; exact: boolean }>;
+  /** Absent on historical reports, which performed exactly one cycle. */
+  plannedCycles?: number; cycles?: RestorationCycle[];
+  exposure?: ExposureEvidence;
+  settingsRestorations: Array<{ phase: 'local' | 'precreation'; cycle?: number; at: string; expectedStateToken: string; actualStateToken: string; exact: boolean }>;
   renders: RestorationRender[]; comparisons: RestorationComparison[];
   importedOriginalSettingsUnchanged?: boolean; stagedRawUnchanged?: boolean; error?: string; summary?: ReturnType<typeof summarizeRestorationCase>;
   sourceEndVerification?: 'native-settings-and-staged-raw' | 'staged-raw-only-no-import-retry';
@@ -43,7 +50,7 @@ export interface RestorationCase {
 export interface RestorationBatch {
   version: 1; id: string; status: 'running' | 'complete' | 'interrupted'; startedAt: string; finishedAt?: string;
   source: string; corpusFingerprint: string; sourceUnchanged?: boolean; sourceVerificationError?: string;
-  baseline: 'as-imported-with-matching-xmp'; controls: number; maskKind: MaskKind; exposureDelta: number; maxEdge: number;
+  baseline: 'as-imported-with-matching-xmp'; controls: number; cycles?: number; maskKind: MaskKind; exposureDelta: number; maxEdge: number;
   autonomousMaskingEnabled: false; environment: Record<string, unknown>; capabilities?: Record<string, unknown>;
   cases: RestorationCase[]; operations: Array<{ at: string; operation: string; phase: 'started' | 'completed' | 'failed'; params?: Record<string, unknown>; result?: unknown; error?: string; errorCode?: string; requestId?: string; outcomeUncertain?: boolean }>;
   error?: string; lockRetained: boolean;
@@ -53,7 +60,12 @@ export interface RestorationBatch {
 const canonical = (value: unknown): string => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-const mutating = new Set(['import_photo', 'create_working_copy', 'checkpoint', 'create_subject_mask', 'create_background_mask', 'adjust_mask', 'restore']);
+const mutating = new Set(['import_photo', 'create_working_copy', 'checkpoint', 'create_subject_mask', 'create_background_mask', 'select_mask', 'adjust_mask', 'restore']);
+function restorationCycles(value: number | undefined) {
+  const cycles = value ?? 1;
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 3) throw new Error('cycles must be an integer from 1 to 3.');
+  return cycles;
+}
 
 export function selectRestorationAssets(corpus: Corpus, ids: string[], controls = 3) {
   if (!Array.isArray(ids) || !ids.length || ids.length > 10 || new Set(ids).size !== ids.length) throw new Error('Choose 1–10 distinct explicit indexed asset IDs.');
@@ -93,10 +105,12 @@ async function inspectImportOnlyFailure(root: string, corpus: Corpus, request: R
     || batch.corpusFingerprint !== corpus.fingerprint || await realpath(batch.source) !== corpus.source)
     throw new Error('resume-import requires an unchanged one-case interrupted report from this indexed corpus.');
   const item = batch.cases[0]!; const asset = corpus.assets.find(value => value.id === item.assetId);
+  if (restorationCycles(batch.cycles) !== restorationCycles(item.plannedCycles)) throw new Error('The failed case cycle count does not match its experiment recipe.');
   if (!asset || item.name !== asset.name || item.sourceSha256 !== asset.raw.sha256 || canonical(item.sourceSidecars) !== canonical(asset.sidecars.map(file => ({ path: file.path, sha256: file.sha256 })))
     || item.status !== 'interrupted' || item.runId || item.workingPhotoId || item.baselineId || item.maskedId || item.editedId || item.maskId || item.maskCompletion || item.exposure
     || !Array.isArray(item.renders) || item.renders.length || !Array.isArray(item.comparisons) || item.comparisons.length
-    || !Array.isArray(item.settingsRestorations) || item.settingsRestorations.length)
+    || !Array.isArray(item.settingsRestorations) || item.settingsRestorations.length
+    || (item.cycles !== undefined && (!Array.isArray(item.cycles) || item.cycles.length)))
     throw new Error('Only an import-only case with no working copy, checkpoint, mask or render may continue.');
   const operations = batch.operations;
   if (!Array.isArray(operations) || operations.length !== 4
@@ -147,32 +161,60 @@ function validateCreatedMask(created: MaskResult, baseline: Candidate, photoId: 
 export function summarizeRestorationCase(item: RestorationCase) {
   const controls = item.comparisons.filter(value => ['unchanged-baseline', 'unchanged-masked', 'unchanged-restored'].includes(value.kind));
   const restorations = item.comparisons.filter(value => value.kind === 'local-restoration' || value.kind === 'precreation-restoration');
-  const effect = item.comparisons.find(value => value.kind === 'local-effect');
+  const plannedCycles = restorationCycles(item.plannedCycles);
+  const effects = item.comparisons.filter(value => value.kind === 'local-effect');
   const maxima = controls.filter(value => value.result.comparable).map(value => value.result.metrics!.maximumChannelDifference);
   const invalidComparisonCount = item.comparisons.filter(value => !value.result.comparable).length;
   const comparisonInputsValid = item.comparisons.length > 0 && invalidComparisonCount === 0;
-  const restoredPairsExact = restorations.length >= 3 && restorations.every(value => value.result.comparable && value.result.pixelsIdentical);
+  const cycles = Array.from({ length: plannedCycles }, (_, index) => {
+    const cycle = index + 1;
+    const record = item.cycles?.find(value => value.cycle === cycle);
+    const localRestores = item.settingsRestorations.filter(value => value.phase === 'local' && (value.cycle ?? 1) === cycle);
+    const pairs = item.comparisons.filter(value => (value.cycle ?? 1) === cycle && ['local-effect', 'local-restoration', 'unchanged-restored'].includes(value.kind));
+    const localPairs = pairs.filter(value => value.kind === 'local-restoration');
+    const effect = pairs.find(value => value.kind === 'local-effect');
+    const exposure = record?.exposure ?? (cycle === 1 ? item.exposure : undefined);
+    const complete = item.cycles ? record?.status === 'complete' : localRestores.length === 1 && localPairs.length === 2;
+    const exactSettingsRestored = localRestores.length === 1 && localRestores[0]!.exact;
+    const restoredPairsExact = localPairs.length === 2 && localPairs.every(value => value.result.comparable && value.result.pixelsIdentical);
+    return { cycle, complete, exactSettingsRestored,
+      localAdjustmentVerified: !!exposure && exposure.requested === exposure.observed,
+      effectPixelsChanged: !!effect?.result.comparable && !effect.result.pixelsIdentical,
+      restoredPairsExact,
+      pixelRestoration: complete && exactSettingsRestored && pairs.length === 4 && pairs.every(value => value.result.comparable) && restoredPairsExact
+        ? 'exact-on-recorded-pairs' : 'unverified' };
+  });
+  const exactSettingsRestored = item.settingsRestorations.length === plannedCycles + 1
+    && item.settingsRestorations.filter(value => value.phase === 'precreation').length === 1
+    && item.settingsRestorations.every(value => value.exact) && cycles.every(value => value.exactSettingsRestored);
+  const restoredPairsExact = restorations.length === plannedCycles * 2 + 1
+    && restorations.filter(value => value.kind === 'precreation-restoration').length === 1
+    && cycles.every(value => value.restoredPairsExact) && restorations.every(value => value.result.comparable && value.result.pixelsIdentical);
   return {
     comparisonInputsValid, invalidComparisonCount,
-    exactSettingsRestored: item.settingsRestorations.length === 2 && item.settingsRestorations.every(value => value.exact),
+    plannedCycles, completedCycles: cycles.filter(value => value.complete).length, cycles,
+    exactSettingsRestored,
     unchangedPairCount: controls.length, unchangedPairsExact: controls.length > 0 && controls.every(value => value.result.comparable && value.result.pixelsIdentical),
     observedControlMaximum: maxima.length ? Math.max(...maxima) : null,
-    localAdjustmentVerified: !!item.exposure && item.exposure.requested === item.exposure.observed,
-    effectPixelsChanged: !!effect?.result.comparable && !effect.result.pixelsIdentical,
-    effectMaximumExceedsObservedControls: comparisonInputsValid && !!effect?.result.comparable && maxima.length > 0 && effect.result.metrics!.maximumChannelDifference > Math.max(...maxima),
+    localAdjustmentVerified: cycles.every(value => value.localAdjustmentVerified),
+    effectPixelsChanged: effects.length === plannedCycles && effects.every(value => value.result.comparable && !value.result.pixelsIdentical),
+    effectMaximumExceedsObservedControls: comparisonInputsValid && effects.length === plannedCycles && maxima.length > 0
+      && effects.every(value => value.result.comparable && value.result.metrics!.maximumChannelDifference > Math.max(...maxima)),
     restoredPairsExact,
-    pixelRestoration: comparisonInputsValid && restoredPairsExact ? 'exact-on-recorded-pairs' : 'unverified',
-    excludedMeasurements: ['Edited-state repeatability', 'Checkpoint-only controls', 'Lightroom restart controls', 'Multiple edit/restore cycles'],
+    pixelRestoration: comparisonInputsValid && exactSettingsRestored && cycles.every(value => value.complete) && restoredPairsExact ? 'exact-on-recorded-pairs' : 'unverified',
+    excludedMeasurements: ['Edited-state repeatability', 'Checkpoint-only controls', 'Lightroom restart controls',
+      ...(plannedCycles === 1 ? ['Multiple edit/restore cycles'] : []), 'Repeated mask creation/deletion'],
     interpretation: 'Descriptive measurements only. Observed control variation is not an acceptance threshold; stored mask identity does not prove AI coverage completion.',
   };
 }
 
 export async function runRestoration(options: {
-  root: string; corpus: Corpus; ids: string[]; controls?: number; maskKind: MaskKind; exposureDelta?: number; maxEdge?: number;
+  root: string; corpus: Corpus; ids: string[]; controls?: number; cycles?: number; maskKind: MaskKind; exposureDelta?: number; maxEdge?: number;
   bridge?: BridgeClient; environmentNotes?: string; onProgress?: (message: string) => void;
   resumeImport?: ResumeImportRequest;
 }) {
   const controls = options.controls ?? 3; const assets = selectRestorationAssets(options.corpus, options.ids, controls);
+  const cycles = restorationCycles(options.cycles);
   const delta = options.exposureDelta ?? 0.25; const maxEdge = options.maxEdge ?? 2048;
   if (!['subject', 'background'].includes(options.maskKind)) throw new Error('maskKind must be subject or background.');
   if (!Number.isFinite(delta) || delta <= 0 || delta > 0.5) throw new Error('exposureDelta must be positive and at most 0.5 native exposure units.');
@@ -186,11 +228,11 @@ export async function runRestoration(options: {
   let resume: ResumeImportPlan | undefined; let resumedSourceId: string | undefined; let resumedCopyCreated = false;
   const batch: RestorationBatch = {
     version: 1, id, status: 'running', startedAt: new Date().toISOString(), source: options.corpus.source, corpusFingerprint: options.corpus.fingerprint,
-    baseline: 'as-imported-with-matching-xmp', controls, maskKind: options.maskKind, exposureDelta: delta, maxEdge, autonomousMaskingEnabled: false, lockRetained: false,
+    baseline: 'as-imported-with-matching-xmp', controls, cycles, maskKind: options.maskKind, exposureDelta: delta, maxEdge, autonomousMaskingEnabled: false, lockRetained: false,
     environment: { platform: platform(), osRelease: release(), architecture: arch(), node: process.version, decoder: sharp.versions,
       gpuConfiguration: null, lightroomRestartState: 'not-established', notes: options.environmentNotes ?? null },
     cases: assets.map(asset => ({ assetId: asset.id, name: asset.name, status: 'pending', sourceSha256: asset.raw.sha256,
-      sourceSidecars: asset.sidecars.map(file => ({ path: file.path, sha256: file.sha256 })), settingsRestorations: [], renders: [], comparisons: [] })), operations: [],
+      sourceSidecars: asset.sidecars.map(file => ({ path: file.path, sha256: file.sha256 })), plannedCycles: cycles, cycles: [], settingsRestorations: [], renders: [], comparisons: [] })), operations: [],
   };
   const persist = async () => { await writeFile(`${resultPath}.tmp`, `${JSON.stringify(batch, null, 2)}\n`, { mode: 0o600 }); await rename(`${resultPath}.tmp`, resultPath); };
   try {
@@ -198,7 +240,7 @@ export async function runRestoration(options: {
     if (options.resumeImport) {
       resume = await inspectImportOnlyFailure(options.root, options.corpus, options.resumeImport);
       if (assets.length !== 1 || assets[0]!.id !== resume.asset.id || controls !== resume.batch.controls || options.maskKind !== resume.batch.maskKind
-        || delta !== resume.batch.exposureDelta || maxEdge !== resume.batch.maxEdge) throw new Error('resume-import must keep the single failed case and its recorded experiment recipe.');
+        || cycles !== (resume.batch.cycles ?? 1) || delta !== resume.batch.exposureDelta || maxEdge !== resume.batch.maxEdge) throw new Error('resume-import must keep the single failed case and its recorded experiment recipe.');
       batch.resumedImport = { parentResultPath: resume.resultPath, parentResultSha256: resume.sha256, parentExperimentId: resume.batch.id,
         stagedPath: resume.item.stagedPath!, expectedSourceStateToken: resume.expectedStateToken }; await persist();
     }
@@ -240,7 +282,7 @@ export async function runRestoration(options: {
     } };
     batch.capabilities = await bridge.call<Record<string, unknown>>('capabilities'); await persist();
     const capabilities = batch.capabilities as { operations?: Record<string, boolean>; renderFormats?: { TIFF?: { bitDepth?: number; lossless?: boolean } } };
-    if (!capabilities.operations?.[`create_${options.maskKind}_mask`] || !capabilities.operations.adjust_mask || !capabilities.operations.restore
+    if (!capabilities.operations?.[`create_${options.maskKind}_mask`] || !capabilities.operations.select_mask || !capabilities.operations.adjust_mask || !capabilities.operations.restore
       || capabilities.renderFormats?.TIFF?.bitDepth !== 16 || capabilities.renderFormats.TIFF.lossless !== true)
       throw new Error('Native bridge does not advertise the required guarded mask operations and lossless 16-bit TIFF export.');
     store = new RunStore(database); const controller = new PhotoController(bridge, store, paths.exportRoot);
@@ -269,23 +311,23 @@ export async function runRestoration(options: {
         item.runId = begun.run.id; item.workingPhotoId = begun.run.workingPhotoId; item.baselineId = begun.baseline.id;
         if (canonical(begun.baseline.settings) !== canonical(original.settings)) throw new Error('Working copy settings differ from the imported original baseline.');
         await persist();
-        const capture = async (phase: Phase, candidate: Candidate) => {
+        const capture = async (phase: Phase, candidate: Candidate, cycle?: number) => {
           const expected = { photoId: begun.run.workingPhotoId, stateToken: candidate.stateToken, settings: candidate.settings };
           const before = await controller.state(expected.photoId); assertState(before, expected);
           const start = Date.now(); const startedAt = new Date(start).toISOString();
           const rendered = await controller.render(begun.run.id, candidate.id, maxEdge, 'TIFF');
           const after = await controller.state(expected.photoId); assertState(after, expected);
-          const record: RestorationRender = { id: randomUUID(), phase, ordinal: item.renders.filter(value => value.phase === phase).length + 1,
+          const record: RestorationRender = { id: randomUUID(), phase, ordinal: item.renders.filter(value => value.phase === phase).length + 1, ...(cycle === undefined ? {} : { cycle }),
             path: rendered.previewPath!, sha256: await hashFile(rendered.previewPath!), startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - start,
             photoId: expected.photoId, runId: begun.run.id, candidateId: candidate.id, stateToken: candidate.stateToken, settings: after.settings, sourceSha256: asset.raw.sha256,
             recipe: { format: 'TIFF', bitDepth: 16, colorSpace: 'sRGB', outputSharpening: false, maxEdge } };
           item.renders.push(record); await persist(); return record;
         };
-        const compare = async (kind: RestorationComparison['kind'], before: RestorationRender, after: RestorationRender) => {
+        const compare = async (kind: RestorationComparison['kind'], before: RestorationRender, after: RestorationRender, cycle?: number) => {
           if (before.photoId !== after.photoId || before.sourceSha256 !== after.sourceSha256 || canonical(before.recipe) !== canonical(after.recipe)) throw new Error('Comparison provenance differs.');
           const result = await compareLosslessTiff(before.path, after.path, { expectedBeforeSha256: before.sha256, expectedAfterSha256: after.sha256,
             ...(['local-restoration', 'precreation-restoration'].includes(kind) ? { differenceMap: { path: join(directory, `difference-${randomUUID()}.png`), amplification: 4096 } } : {}) });
-          item.comparisons.push({ id: randomUUID(), kind, beforeId: before.id, afterId: after.id, measuredAt: new Date().toISOString(), result }); await persist();
+          item.comparisons.push({ id: randomUUID(), kind, beforeId: before.id, afterId: after.id, ...(cycle === undefined ? {} : { cycle }), measuredAt: new Date().toISOString(), result }); await persist();
           if (!result.comparable) throw new Error(`Lossless export inputs are not comparable: ${result.issues.join('; ')}`);
           return result;
         };
@@ -303,29 +345,48 @@ export async function runRestoration(options: {
         assertState(created.state, { photoId: begun.run.workingPhotoId, stateToken: masked.stateToken, settings: masked.settings });
         options.onProgress?.(`${asset.name}: ${controls} unchanged ${options.maskKind}-mask TIFF controls`);
         const maskedRenders = await unchanged('masked-control', masked);
-        const selected = await bridge.call<{ state: PhotoState; maskContext: MaskContext }>('selected_mask', { photoId: begun.run.workingPhotoId, maskId: created.maskId });
-        assertState(selected.state, { photoId: begun.run.workingPhotoId, stateToken: masked.stateToken, settings: masked.settings });
-        const exposure = selected.maskContext.parameters.local_Exposure;
-        if (selected.maskContext.selectedMaskId !== created.maskId || !exposure || ![exposure.value, exposure.min, exposure.max].every(Number.isFinite)
-          || exposure.min >= exposure.max || exposure.value < exposure.min || exposure.value + delta > exposure.max) throw new Error('Requested positive exposure delta is outside the selected mask native range.');
-        const requested = exposure.value + delta;
-        const edited = await controller.editMask(begun.run.id, masked.id, created.maskId, { local_Exposure: requested }, 'Diagnostic local exposure change', 'diagnostic'); item.editedId = edited.id;
-        const readback = await bridge.call<{ state: PhotoState; maskContext: MaskContext }>('selected_mask', { photoId: begun.run.workingPhotoId, maskId: created.maskId });
-        assertState(readback.state, { photoId: begun.run.workingPhotoId, stateToken: edited.stateToken, settings: edited.settings });
-        const observed = readback.maskContext.parameters.local_Exposure?.value;
-        if (readback.maskContext.selectedMaskId !== created.maskId || observed !== requested || edited.stateToken === masked.stateToken) throw new Error('Local exposure change did not verify in native units.');
-        item.exposure = { before: exposure.value, requested, observed, min: exposure.min, max: exposure.max }; await persist();
-        const changedRender = await capture('edited', edited); await compare('local-effect', maskedRenders[0]!, changedRender);
-        options.onProgress?.(`${asset.name}: one local restore, unchanged control, then one pre-creation restore`);
-        const restore = async (target: Candidate, expectedCurrent: Candidate, phase: 'local' | 'precreation') => {
+        const restore = async (target: Candidate, expectedCurrent: Candidate, phase: 'local' | 'precreation', cycle?: number) => {
           const restored = await controller.restore(begun.run.id, target.id, false, expectedCurrent.stateToken);
           const exact = restored.photoId === begun.run.workingPhotoId && restored.stateToken === target.stateToken && canonical(restored.settings) === canonical(target.settings);
-          item.settingsRestorations.push({ phase, at: new Date().toISOString(), expectedStateToken: target.stateToken, actualStateToken: restored.stateToken, exact }); await persist();
+          item.settingsRestorations.push({ phase, ...(cycle === undefined ? {} : { cycle }), at: new Date().toISOString(), expectedStateToken: target.stateToken, actualStateToken: restored.stateToken, exact }); await persist();
           if (!exact) throw new Error('Restored settings or photo identity differ from the saved snapshot.');
         };
-        await restore(masked, edited, 'local'); const restored = await capture('restored-mask', masked);
-        await compare('local-restoration', maskedRenders[0]!, restored);
-        const afterRestore = await capture('restored-mask-control', masked); await compare('unchanged-restored', restored, afterRestore); await compare('local-restoration', maskedRenders[0]!, afterRestore);
+        for (let cycle = 1; cycle <= cycles; cycle++) {
+          const cycleRecord: RestorationCycle = { cycle, status: 'running', startedAt: new Date().toISOString() };
+          item.cycles!.push(cycleRecord); await persist();
+          options.onProgress?.(`${asset.name}: edit/restore cycle ${cycle}/${cycles} against the saved masked checkpoint`);
+          // Restoring a snapshot may clear the UI selection without changing its
+          // saved settings. Explicitly select only the recorded mask under the
+          // fixed checkpoint token; a failed selection is never retried.
+          const selection = await bridge.call<{ state: PhotoState; maskContext: MaskContext }>('select_mask', {
+            photoId: begun.run.workingPhotoId, expectedStateToken: masked.stateToken, maskId: created.maskId,
+          });
+          assertState(selection.state, { photoId: begun.run.workingPhotoId, stateToken: masked.stateToken, settings: masked.settings });
+          if (selection.maskContext.selectedMaskId !== created.maskId) throw new Error('The saved diagnostic mask selection could not be verified.');
+          const selected = await bridge.call<{ state: PhotoState; maskContext: MaskContext }>('selected_mask', { photoId: begun.run.workingPhotoId, maskId: created.maskId });
+          assertState(selected.state, { photoId: begun.run.workingPhotoId, stateToken: masked.stateToken, settings: masked.settings });
+          const exposure = selected.maskContext.parameters.local_Exposure;
+          if (selected.maskContext.selectedMaskId !== created.maskId || !exposure || ![exposure.value, exposure.min, exposure.max].every(Number.isFinite)
+            || exposure.min >= exposure.max || exposure.value < exposure.min || exposure.value + delta > exposure.max) throw new Error('Requested positive exposure delta is outside the selected mask native range.');
+          const requested = exposure.value + delta;
+          if (cycle > 1 && (exposure.value !== item.exposure!.before || requested !== item.exposure!.requested
+            || exposure.min !== item.exposure!.min || exposure.max !== item.exposure!.max)) throw new Error('The selected mask native exposure baseline or range changed between cycles.');
+          const edited = await controller.editMask(begun.run.id, masked.id, created.maskId, { local_Exposure: requested }, `Diagnostic local exposure change, cycle ${cycle}`, 'diagnostic');
+          cycleRecord.editedId = edited.id; if (cycle === 1) item.editedId = edited.id; await persist();
+          const readback = await bridge.call<{ state: PhotoState; maskContext: MaskContext }>('selected_mask', { photoId: begun.run.workingPhotoId, maskId: created.maskId });
+          assertState(readback.state, { photoId: begun.run.workingPhotoId, stateToken: edited.stateToken, settings: edited.settings });
+          const observed = readback.maskContext.parameters.local_Exposure?.value;
+          if (readback.maskContext.selectedMaskId !== created.maskId || observed !== requested || edited.stateToken === masked.stateToken) throw new Error('Local exposure change did not verify in native units.');
+          cycleRecord.exposure = { before: exposure.value, requested, observed, min: exposure.min, max: exposure.max };
+          if (cycle === 1) item.exposure = cycleRecord.exposure; await persist();
+          const changedRender = await capture('edited', edited, cycle); await compare('local-effect', maskedRenders[0]!, changedRender, cycle);
+          await restore(masked, edited, 'local', cycle); const restored = await capture('restored-mask', masked, cycle);
+          await compare('local-restoration', maskedRenders[0]!, restored, cycle);
+          const afterRestore = await capture('restored-mask-control', masked, cycle);
+          await compare('unchanged-restored', restored, afterRestore, cycle); await compare('local-restoration', maskedRenders[0]!, afterRestore, cycle);
+          cycleRecord.status = 'complete'; cycleRecord.finishedAt = new Date().toISOString(); await persist();
+        }
+        options.onProgress?.(`${asset.name}: one pre-creation restore after ${cycles} planned local cycle${cycles === 1 ? '' : 's'}`);
         await restore(begun.baseline, masked, 'precreation'); const precreation = await capture('restored-precreation', begun.baseline);
         await compare('precreation-restoration', baselines[0]!, precreation);
         if (resume) item.sourceEndVerification = 'staged-raw-only-no-import-retry';
@@ -340,7 +401,13 @@ export async function runRestoration(options: {
         item.summary = summarizeRestorationCase(item); item.status = 'complete';
         store.addEvent(begun.run.id, 'restoration_experiment_completed', { experimentId: id, summary: item.summary, autonomousMaskingEnabled: false }); store.setRunStatus(begun.run.id, 'completed');
         options.onProgress?.(`${asset.name}: settings restored exactly; pixel restoration ${item.summary.pixelRestoration}`);
-      } catch (error) { item.status = 'interrupted'; item.error = message(error); if (item.runId) store.setRunStatus(item.runId, 'interrupted'); throw error; }
+      } catch (error) {
+        item.status = 'interrupted'; item.error = message(error);
+        const activeCycle = item.cycles?.find(value => value.status === 'running');
+        if (activeCycle) { activeCycle.status = 'interrupted'; activeCycle.finishedAt = new Date().toISOString(); }
+        item.summary = summarizeRestorationCase(item);
+        if (item.runId) store.setRunStatus(item.runId, 'interrupted'); throw error;
+      }
       finally { item.finishedAt = new Date().toISOString(); await persist(); }
     }
     batch.status = 'complete';
@@ -362,6 +429,7 @@ export async function resumeImportedRestoration(options: {
 }) {
   const resume = await inspectImportOnlyFailure(options.root, options.corpus, options);
   return runRestoration({ root: options.root, corpus: options.corpus, ids: [resume.asset.id], controls: resume.batch.controls,
+    cycles: resume.batch.cycles ?? 1,
     maskKind: resume.batch.maskKind, exposureDelta: resume.batch.exposureDelta, maxEdge: resume.batch.maxEdge,
     bridge: options.bridge, environmentNotes: options.environmentNotes, onProgress: options.onProgress,
     resumeImport: { resultPath: resume.resultPath, expectedStateToken: resume.expectedStateToken, parentSha256: resume.sha256 } });

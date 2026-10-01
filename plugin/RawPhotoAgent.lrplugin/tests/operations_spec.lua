@@ -15,6 +15,8 @@ local importedPhotos, aliases = {}, {}
 local imports, photoSelections, moduleSwitches, writeDepth = 0, 0, 0, 0
 local failImport, failPhotoSelection, failModuleSwitch = false, false, false
 local importedFormat, switchToOtherPhoto = 'RAW', false
+local onCreateCopy, onSelectPhoto, onSwitchModule, pendingPhotoEvent, photoEventAt
+local activeCatalog
 local function clone(value)
     if type(value) ~= 'table' then return value end
     local copy = {}
@@ -75,14 +77,16 @@ local function createNativeMask()
     if maskCreationMode == 'switch' then selected = { original } end
 end
 local catalog = {}
+activeCatalog = catalog
 function catalog:getPath() return '/catalog/test.lrcat' end
 function catalog:getTargetPhoto() return selected[1] end
 function catalog:getTargetPhotos() return #selected == 0 and { original } or selected end
 function catalog:createVirtualCopies()
     mutations = mutations + 1
+    local source = selected[1]
     local copy = photo(2, true)
-    copy.settings = clone(selected[1].settings)
-    selected = { copy }
+    copy.settings = clone(source.settings)
+    if onCreateCopy then onCreateCopy(copy, source) else selected = { copy } end
     return { copy }
 end
 function catalog:withWriteAccessDo(_, callback)
@@ -104,17 +108,19 @@ end
 function catalog:setSelectedPhotos(activePhoto, otherSelectedPhotos)
     assert(writeDepth == 0 and #otherSelectedPhotos == 0, 'select exactly one photo outside write access')
     photoSelections = photoSelections + 1
-    if not failPhotoSelection then selected = { activePhoto } end
+    if onSelectPhoto then onSelectPhoto(activePhoto)
+    elseif not failPhotoSelection then selected = { activePhoto } end
 end
 
 local mocks = {
-    LrApplication = { activeCatalog = function() return catalog end, versionString = function() return 'mock' end },
+    LrApplication = { activeCatalog = function() return activeCatalog end, versionString = function() return 'mock' end },
     LrApplicationView = { getCurrentModuleName = function() return moduleName end,
         switchToModule = function(name)
             assert(name == 'develop' and writeDepth == 0)
             moduleSwitches = moduleSwitches + 1
             if not failModuleSwitch then moduleName = name end
             if switchToOtherPhoto then selected = { original } end
+            if onSwitchModule then onSwitchModule() end
         end },
     LrDevelopController = {
         getSelectedTool = function() return selectedTool end,
@@ -179,6 +185,9 @@ local mocks = {
     LrTasks = { sleep = function(seconds)
         now = now + seconds * 1000
         if pendingMask and now >= maskReadyAt then local callback = pendingMask; pendingMask = nil; callback() end
+        if pendingPhotoEvent and now >= photoEventAt then
+            local callback = pendingPhotoEvent; pendingPhotoEvent = nil; callback()
+        end
     end },
     LrFileUtils = {
         createAllDirectories = function() return true end,
@@ -248,6 +257,66 @@ rejects('TARGET_CHANGED', function() O.create_working_copy({ photoId = 'wrong', 
 selected = { original, photo(3, true) }
 rejects('SELECTION_REQUIRED', function() O.read_state({ photoId = originalId }) end)
 selected = { original }
+local copyParams = { photoId = originalId, copyName = 'Selection contract' }
+local function delayedPhotoEvent(callback, delay)
+    pendingPhotoEvent, photoEventAt = callback, now + (delay or 300)
+end
+local function resetCopy()
+    selected, activeCatalog, pendingPhotoEvent = { original }, catalog, nil
+    original.settings = clone(baseline.settings)
+    onCreateCopy = nil
+end
+local function failedCopy(code, callback, timeout)
+    resetCopy()
+    onCreateCopy = callback
+    local copyRequest = request()
+    if timeout then copyRequest.deadlineAt = now + timeout end
+    local beforeMutations, beforePhotoSelections = mutations, photoSelections
+    rejects(code, function() O.create_working_copy(copyParams, copyRequest) end)
+    check(copyRequest._mutationStarted and mutations == beforeMutations + 1
+        and photoSelections == beforePhotoSelections,
+        'uncertain copy creates exactly once and never forces photo selection')
+end
+local beforeDelayedCopy, beforeCopySelections = mutations, photoSelections
+onCreateCopy = function(newCopy)
+    delayedPhotoEvent(function() selected = { newCopy } end)
+end
+local delayedCopy = O.create_working_copy(copyParams, request())
+check(selected[1].virtual and delayedCopy.photoId == O.selected({}).photoId
+    and U.hash(delayedCopy.state.settings) == U.hash(baseline.settings)
+    and mutations == beforeDelayedCopy + 1 and photoSelections == beforeCopySelections,
+    'delayed native copy selection is observed without another creation or selection call')
+failedCopy('COPY_SELECTION_UNVERIFIED', function() end)
+failedCopy('EXPIRED', function(newCopy)
+    delayedPhotoEvent(function() selected = { newCopy } end, 200)
+end, 200)
+failedCopy('EXPIRED', function(newCopy) selected = { newCopy }; now = now + 200 end, 200)
+failedCopy('TARGET_CHANGED', function()
+    delayedPhotoEvent(function() selected = { photo(999, true) } end)
+end)
+failedCopy('SELECTION_REQUIRED', function(newCopy)
+    delayedPhotoEvent(function() selected = { original, newCopy } end)
+end)
+failedCopy('SELECTION_REQUIRED', function()
+    delayedPhotoEvent(function() selected = {} end)
+end)
+failedCopy('TARGET_CHANGED', function()
+    delayedPhotoEvent(function()
+        activeCatalog = { getPath = function() return '/catalog/other.lrcat' end }
+    end)
+end)
+failedCopy('VERIFY_FAILED', function()
+    delayedPhotoEvent(function() original.settings.Exposure2012 = 0.1 end)
+end)
+failedCopy('VERIFY_FAILED', function(newCopy)
+    delayedPhotoEvent(function() newCopy.settings.Exposure2012 = 0.1 end)
+end)
+failedCopy('VERIFY_FAILED', function(newCopy)
+    delayedPhotoEvent(function() newCopy.settings.PointColors = {} end)
+end)
+failedCopy('VERIFY_FAILED', function(newCopy) newCopy.virtual = false end)
+failedCopy('VERIFY_FAILED', function(newCopy) newCopy.path = '/photos/wrong.CR3' end)
+resetCopy()
 local created = O.create_working_copy({ photoId = originalId, copyName = 'Test' }, request())
 local id, copy = created.photoId, selected[1]
 check(id ~= originalId and copy.virtual, 'copy has a distinct virtual identity')
@@ -556,6 +625,57 @@ check(importRequest._mutationStarted and imports == 1 and #selected == 1
 check(importedPhoto.settings.Exposure2012 == 0, 'import applies no development edit to original')
 local importedAgain = O.import_photo(uploadParams, request())
 check(imports == 1 and importedAgain.photoId == imported.photoId, 'duplicate path uses existing catalog original')
+local importedSettings = clone(importedPhoto.settings)
+selected = { original }
+local beforeDelayedImport, beforeImportSelections = imports, photoSelections
+onSelectPhoto = function(activePhoto)
+    delayedPhotoEvent(function() selected = { activePhoto } end)
+end
+local delayedImport = O.import_photo(uploadParams, request())
+check(delayedImport.photoId == imported.photoId and imports == beforeDelayedImport
+    and photoSelections == beforeImportSelections + 1,
+    'import observes delayed selection without importing or selecting again')
+local function failedImportSelection(code, callback, timeout)
+    selected, moduleName, pendingPhotoEvent = { original }, 'develop', nil
+    importedPhoto.settings = clone(importedSettings)
+    onSelectPhoto = callback
+    local importGuardRequest = request()
+    if timeout then importGuardRequest.deadlineAt = now + timeout end
+    local beforeImports, beforeSelections, beforeModules = imports, photoSelections, moduleSwitches
+    rejects(code, function() O.import_photo(uploadParams, importGuardRequest) end)
+    check(importGuardRequest._mutationStarted and imports == beforeImports
+        and photoSelections == beforeSelections + 1 and moduleSwitches == beforeModules,
+        'import selection failure is terminal without another import, selection, or module switch')
+end
+failedImportSelection('EXPIRED', function(activePhoto)
+    delayedPhotoEvent(function() selected = { activePhoto } end, 200)
+end, 200)
+failedImportSelection('EXPIRED', function(activePhoto)
+    selected = { activePhoto }; now = now + 200
+end, 200)
+failedImportSelection('STALE_STATE', function(activePhoto)
+    delayedPhotoEvent(function()
+        activePhoto.settings.Exposure2012 = 0.1
+        selected = { activePhoto }
+    end)
+end)
+check(importedPhoto.settings.Exposure2012 == 0.1, 'failed import does not rewrite a native settings difference')
+failedImportSelection('STALE_STATE', function(activePhoto)
+    selected = { activePhoto }
+    activePhoto.settings.PointColors = {}
+end)
+check(type(importedPhoto.settings.PointColors) == 'table', 'absent-to-empty native settings change is not normalized away')
+onSelectPhoto, pendingPhotoEvent = nil, nil
+importedPhoto.settings, selected, moduleName = clone(importedSettings), { importedPhoto }, 'library'
+onSwitchModule = function() importedPhoto.settings.Exposure2012 = 0.2 end
+local importDevelopRequest = request()
+local beforeDevelopImports, beforeDevelopSelections, beforeDevelopSwitches = imports, photoSelections, moduleSwitches
+rejects('STALE_STATE', function() O.import_photo(uploadParams, importDevelopRequest) end)
+check(importDevelopRequest._mutationStarted and imports == beforeDevelopImports
+    and photoSelections == beforeDevelopSelections + 1 and moduleSwitches == beforeDevelopSwitches + 1
+    and importedPhoto.settings.Exposure2012 == 0.2,
+    'import settings drift on entering Develop remains terminal, without rebasing or restoring the original')
+onSwitchModule, importedPhoto.settings = nil, clone(importedSettings)
 local dngPath = uploadDirectory .. '/image.dng'
 files[dngPath], importedFormat = 400, 'DNG'
 local dng = O.import_photo({ path = dngPath, filename = 'image.dng' }, request())
@@ -592,6 +712,17 @@ local revealed = O.reveal_photo({ photoId = imported.photoId }, revealRequest)
 check(revealed.photoId == imported.photoId and revealRequest._mutationStarted and moduleName == 'develop'
     and photoSelections == beforeSelections and O.read_state({ photoId = imported.photoId }).stateToken == originalToken,
     'reveal enters Develop and preserves original selection/settings')
+moduleName = 'library'
+onSwitchModule = function()
+    moduleName = 'library'
+    delayedPhotoEvent(function() moduleName = 'develop' end, 200)
+end
+local expiredRevealRequest = request(); expiredRevealRequest.deadlineAt = now + 200
+local beforeExpiredSwitches = moduleSwitches
+rejects('EXPIRED', function() O.reveal_photo({ photoId = imported.photoId }, expiredRevealRequest) end)
+check(expiredRevealRequest._mutationStarted and moduleSwitches == beforeExpiredSwitches + 1,
+    'module completion at the expired deadline cannot report success or switch again')
+onSwitchModule, pendingPhotoEvent = nil, nil
 moduleName, failModuleSwitch = 'library', true
 local failedRevealRequest = request()
 rejects('REVEAL_UNVERIFIED', function() O.reveal_photo({ photoId = imported.photoId }, failedRevealRequest) end)
