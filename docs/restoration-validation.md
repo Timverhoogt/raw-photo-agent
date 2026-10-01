@@ -1,6 +1,6 @@
 # Restoration validation: next gate
 
-Status: pilot implemented and three additional RAW cases measured, 28 September 2026. **Keep exact settings and pixel checks, and keep autonomous masking disabled.** Measurements below inform the remaining experiments; they set no pixel tolerance and change no feature gate.
+Status: repeated-cycle pilot implemented and measured on two RAWs, 1 October 2026. **Keep exact settings and pixel checks, and keep autonomous masking disabled.** Measurements below inform the remaining experiments; they set no pixel tolerance and change no feature gate.
 
 ## What the lossless trial establishes
 
@@ -40,7 +40,7 @@ An unfiltered effect difference map at 256× amplification shows broad backgroun
 
 ## Remaining experiments
 
-The first fixed checkpoint-only/no-op restore pilot has completed on `IMG_0478.CR3`: nine TIFFs, fifteen nonexact comparisons, exact settings throughout, and unchanged source/evidence hashes. The subsequent restarted Auto, GPU Off, and restored-Auto conditions completed twenty-seven more TIFFs with exact settings against a common, explicitly rebased post-restart baseline; all forty-five comparisons were nonexact. Both original Auto preferences are restored and reverified. The first final-Auto attempt stopped before exports during copy-selection verification; its copy and evidence were preserved and reconciled after unlock. One separate replacement completed with the extra preparation recorded. See [render repeatability](render-repeatability.md) for separate comparison groups, baseline changes, interruption evidence and scope limits. Asynchronous copy selection, import-time settings changes, repeated edit/restore cycles, and deliberate residual/boundary tests remain the next reliability and recovery work.
+The first fixed checkpoint-only/no-op restore pilot has completed on `IMG_0478.CR3`: nine TIFFs, fifteen nonexact comparisons, exact settings throughout, and unchanged source/evidence hashes. The subsequent restarted Auto, GPU Off, and restored-Auto conditions completed twenty-seven more TIFFs with exact settings against a common, explicitly rebased post-restart baseline; all forty-five comparisons were nonexact. Both original Auto preferences are restored and reverified. The first final-Auto attempt stopped before exports during copy-selection verification; its copy and evidence were preserved and reconciled after unlock. One separate replacement completed with the extra preparation recorded. See [render repeatability](render-repeatability.md) for separate comparison groups, baseline changes, interruption evidence and scope limits. Bounded copy-selection observation and repeated edit/restore cycles were subsequently added and tested as recorded below. Import drift diagnosis, broader scene coverage, and deliberate native residual/boundary experiments remain.
 
 1. **Collect matched controls on varied images.** Start with the supplied RAW folder, then extend to 5–10 varied images: fine fur/hair, hard subject edges, smooth gradients, dark noise, bright highlights, and small subjects. Near-duplicate frames are not independent scene coverage. Run 10 unchanged exports per state and three edit/restore cycles as an initial measurement batch, not as a certification sample size. Include states with no mask, a subject mask, a background mask, and multiple existing masks. Preserve originals; run all interventions on explicit diagnostic virtual copies.
 2. **Separate rendering from recovery.** Capture unchanged reference exports before any mutation. Interleave unchanged exports with checkpoint-only controls and real edit/restore cycles; repeat unchanged exports after recovery. Keep all samples and record ordering/timing. Do not repeatedly restore or export until a convenient comparison passes. Separate warm exports from first exports after reopening the photo and after restarting Lightroom. Compare 2048-pixel and full-resolution exports in separate groups. Record Lightroom/build, process version, profile, GPU configuration, export recipe, decoder version, source digest, state tokens, and mask identities; do not pool differing environments.
@@ -99,4 +99,35 @@ node src/restoration/cli.ts resume-import \
 
 This command inherits the failed experiment's recipe and requires a one-case import-only `STALE_STATE` report. It rejects timeouts, other mutations, changed source files, a different selection and a stale token; it does not release locks or retry the import. The new report links the failed report by SHA-256. Original native settings are verified at preflight only in this mode: the command finishes on the restored working copy, avoiding another import/selection operation. It still verifies working-copy restoration and source bytes, but does not claim a final native reread of the original.
 
-`analyze` reads saved evidence and prints a new report without Lightroom calls or replacing the original result. Invalid comparison inputs make the overall pixel result unverified even when other restoration pairs match. Deliberate synthetic controls cover single low-bit changes, thin coherent regions, stale hashes and incompatible image metadata. Real +0.25 and +0.01 EV interventions serve as positive controls; deliberately retained native residuals, multiple edit/restore cycles, and restoration across restarts still need separate evidence. The completed restart/GPU campaign measured unchanged, checkpoint-only, and no-op restoration exports; it does not establish those broader recovery properties.
+`analyze` reads saved evidence and prints a new report without Lightroom calls or replacing the original result. Invalid comparison inputs make the overall pixel result unverified even when other restoration pairs match. Deliberate synthetic controls cover single low-bit changes, thin coherent regions, stale hashes and incompatible image metadata. Real +0.25 and +0.01 EV interventions serve as positive controls. The six native cycles below extend repeated local restoration evidence; deliberately retained native residuals, repeated mask creation/deletion, and restoration across restarts still need separate evidence. The completed restart/GPU campaign measured unchanged, checkpoint-only, and no-op restoration exports; it does not establish those broader recovery properties.
+
+## Three-cycle live trials — 1 October 2026
+
+Two fixed experiments ran serially on fresh RAW/XMP imports and diagnostic virtual copies in Lightroom 15.5.1. Each collected ten unchanged pre-mask exports and ten unchanged masked exports, then three identical local exposure/edit/restore cycles against the fixed masked checkpoint, followed by one pre-creation restoration. Each cycle retained an edited TIFF and two restored TIFFs. All thirty TIFFs per case were 2048 × 1365, native 16-bit sRGB without output sharpening; the controller's normal JPEGs are separate priming evidence. Each experiment contains 103 comparisons: 45 pre-mask, 45 masked, three local effects, six restored/reference, three post-restore unchanged, and one pre-creation restoration.
+
+| Comparison | Subject on IMG_0487, +0.25 EV: maximum range | Background on IMG_0478, +0.01 EV: maximum range |
+| --- | ---: | ---: |
+| Unchanged pre-mask, 45 pairs | 14–30 | 23–42 |
+| Unchanged masked, 45 pairs | 19–46 | 23–42 |
+| Intended local effect, 3 pairs | 8394 | 349 |
+| Local restored/reference, 6 pairs | 29–30 | 29–42 |
+| Unchanged after local restore, 3 pairs | 9–30 | 29–42 |
+| Pre-creation restoration, 1 pair | 24 | 26 |
+
+Ranges are native uint16 code differences on a 0–65535 scale, not thresholds. Every one of the 206 comparisons was nonexact. Subject local-restoration pairs changed 2,821–4,955 pixels; background pairs changed 113–189 pixels. Exact native settings recovered after all six local restorations and both pre-creation restorations. Each intervention was verified in native units and changed exported pixels. Pixel recovery remains **unverified** in every cycle. The small +0.01 EV intervention is a positive control, not evidence of detecting an intentionally failed undo.
+
+Both imports and virtual-copy creations completed without a retry. Mask selection was explicitly reestablished under the saved state guard at each cycle. This exercises the integrated path, but does not establish that the SDK's delayed-selection condition occurred, nor explain the earlier import drift. Original corpus hashes, staged RAW/XMP hashes, and all sixty saved TIFF hashes reverified. The original staged photos' native settings matched at each experiment's final check. Both locks released and the bridge was idle afterward.
+
+The native experiments ran on commit `11f4dea`, with the installed Operations.lua hash recorded. No local automated tests or source edits ran concurrently with exports; small progress reads and remote GitHub CI were separate. Lightroom was already open, and the bridge was reloaded before the first experiment. GPU preferences and time since Lightroom restart were not freshly established. These two photographs, with different mask types and intervention sizes, are separate descriptive groups rather than a controlled comparison or independent certification sample. One amplified subject-restoration map was inspected at overview size; that view does not certify every boundary pixel. No tolerance or feature gate changed.
+
+Private evidence:
+
+- Subject: `.runtime/restoration/restoration-e05319fe-8a87-46dd-8c65-019423c3c935/results.json`.
+- Background: `.runtime/restoration/restoration-b02a25fb-f478-494b-9552-c65f8b213fcf/results.json`.
+- Campaign and final hash audit: `.runtime/validation/roadmap-oct1-campaign.json`.
+
+### Next bounded experiments
+
+Before repeating the problematic import for diagnosis, retain immutable full settings at the existing before-selection, after-selection, and Develop guards, with request/photo identity, timestamps and exact changed paths. The current generic STALE_STATE evidence cannot reconstruct the first divergent readback. Keep absent-versus-empty changes explicit; do not silently accept a new baseline.
+
+A deliberate native negative control should use a separate copy and a predeclared incomplete adjustment reversal, for example baseline +0.01 EV after a +0.25 EV edit. Keep the true residual settings/token and require comparison against the saved baseline to reject recovery regardless of pixels. Label it an intentional residual, not a spontaneous Lightroom restore failure. Any final baseline restore must be one separately recorded action under the residual's actual state guard. No such native negative-control run is claimed here.
