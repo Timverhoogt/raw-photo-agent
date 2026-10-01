@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import sharp from 'sharp';
 
 export const DETAIL_EDGE = 896;
 export interface DetailPoint { id: string; label: string; x: number; y: number }
@@ -21,6 +20,8 @@ export function validDetailPoints(value: unknown): value is DetailPoint[] {
 }
 
 export async function readDetailSource(path: string, stateToken: string): Promise<DetailSource> {
+  // Point validation also serves the dependency-free Codex CLI compatibility check.
+  const { default: sharp } = await import('sharp');
   const metadata = await sharp(path).metadata();
   if (metadata.format !== 'jpeg' || !metadata.width || !metadata.height || metadata.orientation && metadata.orientation !== 1) {
     throw new Error('Detail inspection requires an upright Lightroom JPEG export.');
@@ -31,6 +32,7 @@ export async function readDetailSource(path: string, stateToken: string): Promis
 /** Extract export pixels directly: never resize the overview, upscale, or infer sensor resolution. */
 export async function cropDetails(source: DetailSource, points: DetailPoint[], directory: string): Promise<DetailImage[]> {
   if (!validDetailPoints(points)) throw new Error('Choose one or two valid detail points.');
+  const { default: sharp } = await import('sharp');
   const actual = await readDetailSource(source.path, source.stateToken);
   if (actual.width !== source.width || actual.height !== source.height) throw new Error('The saved detail export changed dimensions.');
   await mkdir(directory, { recursive: true, mode: 0o700 });
