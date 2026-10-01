@@ -1,5 +1,7 @@
 # Repeatable RAW quality checks
 
+This guide covers complete Lightroom editing trials and photographer preferences. For provider settings and isolated model decision probes, see [model evaluation](model-evaluation.md).
+
 The evaluation harness keeps an indexed local corpus and compares **as-imported starting image**, **fixed gentle adjustment**, and **agent result**. A successful run establishes that real edits and exports completed. Photographic improvement requires actual photographer preferences; the runner never records those preferences or answers a creative question for you.
 
 ## Index the corpus

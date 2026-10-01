@@ -10,7 +10,8 @@ import { FileBridge } from '../bridge.ts';
 import { RunStore } from '../store.ts';
 import { PhotoController } from '../controller.ts';
 import { getPaths } from '../config.ts';
-import { CodexPhotoAgent } from './agent.ts';
+import { FileLogger, errorFields, type Logger } from '../log.ts';
+import { createPhotoAgent } from '../agent/index.ts';
 import { DemoEngine, type Upload } from './session.ts';
 
 const runFile = promisify(execFile);
@@ -110,10 +111,11 @@ async function loadUpload(root: string, id: string): Promise<Upload> {
   return upload;
 }
 
-export async function startDemo(options: { root?: string; port?: number } = {}) {
+export async function startDemo(options: { root?: string; port?: number; logger?: Logger } = {}) {
   const paths = getPaths(options.root);
   const uploadRoot = join(paths.runtime, 'uploads');
   await mkdir(paths.runtime, { recursive: true, mode: 0o700 });
+  const logger = options.logger ?? new FileLogger(join(paths.runtime, 'logs', 'demo.log'));
   const releaseServer = await acquireServerLock(paths.runtime);
   let failedStore: RunStore | undefined;
   try {
@@ -121,23 +123,40 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
   const store = new RunStore(paths.database);
   failedStore = store;
   const controller = new PhotoController(bridge, store, paths.exportRoot);
-  const agent = new CodexPhotoAgent();
+  const agent = createPhotoAgent(process.env, {
+    onAttempt: attempt => { if (!attempt.ok) logger.log('warn', 'decision_attempt_failed', { code: attempt.errorCode, provider: agent.provider, model: agent.model }); },
+  });
   const maxEdits = Number(process.env.RPA_MAX_EDITS ?? 6);
   if (!Number.isInteger(maxEdits) || maxEdits < 1 || maxEdits > 10) throw new Error('RPA_MAX_EDITS must be an integer from 1 to 10.');
   const engine = new DemoEngine(controller, agent, paths.runtime, { maxEdits });
-  let agentStatus = await agent.status();
+  const describeAgent = (status: Awaited<ReturnType<typeof agent.status>>) => ({ ...status, dataLeavesDevice: agent.capabilities.dataLeavesDevice });
+  let agentStatus = describeAgent(await agent.status());
   let connection: { online: boolean; message?: string } = { online: false, message: 'Checking Lightroom…' };
   let refreshing = false;
   const clients = new Set<ServerResponse>();
+  const writeClient = (client: ServerResponse, data: string) => {
+    try { client.write(data); if (client.destroyed || client.writableLength > 1_000_000) { clients.delete(client); client.destroy(); } }
+    catch { clients.delete(client); }
+  };
   const snapshot = () => ({ connection, agent: agentStatus, session: engine.session });
-  const broadcast = () => { const data = `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`; for (const client of clients) client.write(data); };
-  engine.on('change', broadcast);
+  const broadcast = () => { const data = `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`; for (const client of clients) writeClient(client, data); };
+  let lastStatus: string | undefined;
+  engine.on('change', () => {
+    const status = engine.session?.status;
+    if (status !== lastStatus) { lastStatus = status; logger.log(status === 'error' ? 'error' : 'info', 'session_status', { status, ...(engine.session?.error ? { error: engine.session.error } : {}) }); }
+    broadcast();
+  });
   const refresh = async () => {
     if (refreshing) return;
     refreshing = true;
+    const wasOnline = connection.online;
     try { const result = await bridge.status(); connection = { online: result.online, ...(!result.online ? { message: 'Start Raw Photo Agent in Lightroom’s Plug-in Extras menu.' } : {}) }; }
-    catch { connection = { online: false, message: 'The Lightroom bridge could not be read.' }; }
-    finally { refreshing = false; broadcast(); }
+    catch (error) { connection = { online: false, message: 'The Lightroom bridge could not be read.' }; logger.log('warn', 'bridge_unreadable', errorFields(error)); }
+    finally {
+      refreshing = false;
+      if (connection.online !== wasOnline) logger.log('info', 'bridge_connection', { online: connection.online });
+      broadcast();
+    }
   };
   await refresh();
   let boundPort = options.port ?? Number(process.env.RPA_PORT ?? 4318);
@@ -157,7 +176,7 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
       if (req.method === 'GET' && url.pathname === '/api/state') { json(res,200,snapshot()); return; }
       if (req.method === 'GET' && url.pathname === '/api/events') {
         res.writeHead(200, { 'Content-Type':'text/event-stream', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
-        clients.add(res); res.write(`event: state\ndata: ${JSON.stringify(snapshot())}\n\n`); req.on('close', () => clients.delete(res)); return;
+        clients.add(res); writeClient(res, `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`); res.on('error', () => clients.delete(res)); req.on('close', () => clients.delete(res)); return;
       }
       const preview = /^\/api\/previews\/([^/]+)\/([^/]+)$/.exec(url.pathname);
       if (req.method === 'GET' && preview) {
@@ -181,8 +200,8 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
       if (url.pathname === '/api/sessions') {
         await refresh();
         if (!connection.online) throw new Error(connection.message);
-        agentStatus = await agent.status();
-        if (!agentStatus.available) throw new Error(agentStatus.message ?? 'Codex is not ready.');
+        agentStatus = describeAgent(await agent.status());
+        if (!agentStatus.available) throw new Error(agentStatus.message ?? 'The photo agent is not ready.');
         const upload = input.uploadId ? await loadUpload(uploadRoot,textValue(input.uploadId,'uploadId')) : undefined;
         engine.start({intent:textValue(input.intent,'intent'), upload, useSelected:input.useSelected === true});
         json(res,202,{ok:true}); return;
@@ -199,20 +218,54 @@ export async function startDemo(options: { root?: string; port?: number } = {}) 
         json(res,202,{ok:true}); return;
       }
       json(res,404,{error:'Not found.'});
-    } catch (error) { if (!res.headersSent) json(res,400,{error:error instanceof Error ? error.message : String(error)}); else res.destroy(); }
+    } catch (error) { logger.log('warn', 'request_failed', { method: req.method, path: (req.url ?? '').split('?')[0], ...errorFields(error) }); if (!res.headersSent) json(res,400,{error:error instanceof Error ? error.message : String(error)}); else res.destroy(); }
   });
   server.requestTimeout = 180000;
   await new Promise<void>((done, reject) => { server.once('error', reject); server.listen(boundPort,'127.0.0.1',done); });
   boundPort = (server.address() as {port:number}).port;
-  const timer = setInterval(() => { void refresh(); for (const client of clients) client.write(': heartbeat\n\n'); },3000);
+  const timer = setInterval(() => { void refresh(); for (const client of [...clients]) writeClient(client, ': heartbeat\n\n'); },3000);
   timer.unref();
-  const authTimer = setInterval(() => { void agent.status().then(result => { agentStatus=result; broadcast(); }).catch(() => {}); },60000); authTimer.unref();
-  return { server,engine,url:`http://127.0.0.1:${boundPort}`, close:async () => { clearInterval(timer); clearInterval(authTimer); await engine.shutdown(); for(const client of clients) client.end(); await new Promise<void>(done=>server.close(()=>done())); store.close(); await releaseServer(); } };
-  } catch (error) { failedStore?.close(); await releaseServer(); throw error; }
+  const authTimer = setInterval(() => { void agent.status().then(result => { agentStatus=describeAgent(result); broadcast(); }).catch(error => logger.log('warn', 'agent_status_failed', errorFields(error))); },60000); authTimer.unref();
+  logger.log('info', 'server_started', { port: boundPort, provider: agent.provider, model: agent.model, agent: agentStatus.available ? 'ready' : 'unavailable', bridgeOnline: connection.online });
+  return { server,engine,url:`http://127.0.0.1:${boundPort}`, close:async () => {
+    clearInterval(timer); clearInterval(authTimer); await engine.shutdown();
+    for(const client of clients) client.end();
+    const closed = new Promise<void>(done=>server.close(()=>done()));
+    server.closeIdleConnections(); setTimeout(() => server.closeAllConnections(), 2000).unref();
+    await closed; store.close(); await releaseServer(); logger.log('info', 'server_stopped');
+  } };
+  } catch (error) { logger.log('error', 'startup_failed', errorFields(error)); failedStore?.close(); await releaseServer(); throw error; }
 }
+export const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+/** Runs the graceful close, but gives up (so the process can exit) if it hangs. */
+export async function closeWithin(close: () => Promise<void>, timeoutMs: number, logger: Logger): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      close(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Shutdown exceeded ${timeoutMs} ms.`)), timeoutMs); }),
+    ]);
+    return true;
+  } catch (error) {
+    logger.log('error', 'shutdown_failed', errorFields(error));
+    return false;
+  } finally { clearTimeout(timer); }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const demo = await startDemo();
-  process.stdout.write(`Raw Photo Agent demo: ${demo.url}\nLightroom remains the editor. Keep its Develop window beside the browser.\n`);
+  const logger = new FileLogger(join(getPaths().runtime, 'logs', 'demo.log'));
+  const demo = await startDemo({ logger });
+  process.stdout.write(`Raw Photo Agent demo: ${demo.url}\nLightroom remains the editor. Keep its Develop window beside the browser.\nLog: ${join(getPaths().runtime, 'logs', 'demo.log')}\n`);
   let closing = false;
-  for (const signal of ['SIGINT','SIGTERM'] as const) process.on(signal,()=>{ if(!closing){closing=true;void demo.close().then(()=>process.exit(0));} });
+  const stop = (reason: string, exitCode: number) => {
+    if (closing) return;
+    closing = true;
+    logger.log(exitCode === 0 ? 'info' : 'error', 'shutdown_requested', { reason });
+    void closeWithin(() => demo.close(), SHUTDOWN_TIMEOUT_MS, logger).then(ok => process.exit(ok ? exitCode : exitCode || 1));
+  };
+  for (const signal of ['SIGINT','SIGTERM'] as const) process.on(signal, () => stop(signal, 0));
+  // The session lock is deliberately kept by close(); a crash never clears an uncertain Lightroom operation.
+  process.on('uncaughtException', error => { logger.log('error', 'uncaught_exception', errorFields(error)); stop('uncaughtException', 1); });
+  process.on('unhandledRejection', reason => { logger.log('error', 'unhandled_rejection', errorFields(reason)); stop('unhandledRejection', 1); });
 }

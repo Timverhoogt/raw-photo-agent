@@ -2,7 +2,7 @@
 
 Validation performed on macOS with Lightroom Classic 15.5.1 on 27–28 September 2026. The initial guided trial used one Canon CR3 and a separate working virtual copy; a later mask diagnostic used a second CR3 depicting two deer. These are live integrations, distinct from automated tests with simulated bridge responses. In the initial trial the user compared two interpretations and selected B, the closer crop.
 
-The detailed journal, native snapshot references, comparison reports, source RAW, and exported photos remain local and are not included in this repository. Catalog identifiers, state hashes, and run identifiers are also omitted. A fresh checkout should run the documented acceptance workflow against a photo its user is authorized to edit; this summary is not a reproducible evidence bundle.
+Two saved review JPEGs are included in the [README comparison](docs/example.md), with their source credit and editing context. The detailed journal, native snapshot references, comparison reports, source RAW, and full-size exports remain local. Catalog identifiers, state hashes, and run identifiers are also omitted. A fresh checkout should run the documented acceptance workflow against a photo its user is authorized to edit; this summary is not a reproducible evidence bundle.
 
 ## Observed results
 
@@ -24,7 +24,7 @@ The earlier mask/no-mask restoration test recovered exact recorded settings in b
 
 ## User selection and delivery check
 
-The user viewed two edited interpretations and selected B, the closer crop. The selected JPEG is 5035 × 2760 pixels and embeds the sRGB IEC61966-2.1 profile. An independent read-only SHA-256 comparison verified that the delivery file matches the export referenced by its recorded candidate. The image and its runtime references are excluded from the repository.
+The user viewed two edited interpretations and selected B, the closer crop. The selected JPEG is 5035 × 2760 pixels and embeds the sRGB IEC61966-2.1 profile. An independent read-only SHA-256 comparison verified that the delivery file matches the export referenced by its recorded candidate. The full-size image and its runtime references are excluded from the repository; its saved 2048 × 1123 review preview is included in the README comparison.
 
 ## Local browser demo trial
 

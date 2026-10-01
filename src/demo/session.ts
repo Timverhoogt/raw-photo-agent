@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import type { Photo, PhotoController, PhotoState } from '../controller.ts';
 import type { Candidate } from '../store.ts';
 import { verifyRestoredRendering } from '../images.ts';
-import { decisionMasks, isRetryableReviewError, LOCAL_ADJUSTMENTS, parseDecision } from './agent.ts';
-import type { Decision, DecisionInput, DecisionMask } from './agent.ts';
+import { decisionMasks, isRetryableReviewError, LOCAL_ADJUSTMENTS, parseDecision } from '../agent/core.ts';
+import type { Decision, DecisionInput, DecisionMask } from '../agent/core.ts';
 import { cropDetails, readDetailSource } from './details.ts';
 import type { DetailImage, DetailPoint, DetailSource } from './details.ts';
 

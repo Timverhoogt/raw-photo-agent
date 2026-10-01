@@ -7,8 +7,8 @@ import sharp from 'sharp';
 import { RunStore } from '../src/store.ts';
 import { PhotoController } from '../src/controller.ts';
 import { DemoEngine } from '../src/demo/session.ts';
-import { PhotoAgentError } from '../src/demo/agent.ts';
-import type { Decision } from '../src/demo/agent.ts';
+import { PhotoAgentError } from '../src/agent/core.ts';
+import type { Decision } from '../src/agent/core.ts';
 
 function decision(overrides: Partial<Decision> = {}): Decision { return {action:'finish',title:'Ready',observation:'The visible detail is retained.',reason:'Compare the versions.',adjustments:{},candidateId:null,maskId:null,question:null,options:[],detailPoints:[],...overrides}; }
 function fixture(agent: {decide: (...args:any[])=>Promise<Decision>}, options: {failApply?:boolean; failExport?:boolean; mismatchedExport?:boolean; maxEdits?:number; existingMask?: boolean; localEdits?: boolean; maskReadbackMismatch?: boolean; failMaskApply?: boolean} = {}) {

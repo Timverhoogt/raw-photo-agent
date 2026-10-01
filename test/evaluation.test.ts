@@ -12,7 +12,7 @@ import { acquireEvaluationLock, fixedAdjustments, runEvaluation, selectAssets } 
 import type { EvaluationBatch, EvaluationAgent } from '../src/evaluation/runner.ts';
 import { buildReview, recordVote, summarizeReview } from '../src/evaluation/review.ts';
 import type { BridgeClient } from '../src/controller.ts';
-import type { Decision, DecisionInput } from '../src/demo/agent.ts';
+import type { Decision, DecisionInput } from '../src/agent/core.ts';
 
 async function corpusFixture() {
   const root = await mkdtemp(join(tmpdir(), 'rpa-evaluation-')); const source = join(root, 'RAW'); await mkdir(source);

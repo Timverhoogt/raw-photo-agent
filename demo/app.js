@@ -196,6 +196,9 @@ function renderConnection() {
   connectionLabel($('agent-status'), agent.available,
     connected ? (agent.available ? (agent.model || 'Agent ready') : 'Agent unavailable') : 'Waiting for connection',
     agent.message || [agent.provider, agent.model].filter(Boolean).join(' · '));
+  $('privacy-note').textContent = agent.dataLeavesDevice === false
+    ? 'The source RAW stays on your Mac. JPEG previews are reviewed by a model running on this computer.'
+    : `The source RAW stays on your Mac. JPEG previews are sent to ${agent.provider === 'codex-cli' ? 'your signed-in Codex account' : agent.provider === 'anthropic' ? 'the Claude API' : 'the configured model service'} for visual review.`;
   document.body.classList.toggle('transport-stale', !connected);
 }
 
@@ -204,7 +207,7 @@ function startHint() {
   if (awaitingSession) return 'Waiting for the bridge to confirm the new session…';
   if (!connected) return transportError || 'Connecting to the local bridge…';
   if (!state.connection?.online) return state.connection?.message || 'Open Lightroom Classic and start the local bridge to begin.';
-  if (!state.agent?.available) return state.agent?.message || 'The agent is unavailable. Start the signed-in Codex agent connection to begin.';
+  if (!state.agent?.available) return state.agent?.message || 'The photo agent is unavailable. Check its model provider settings to begin.';
   if (state.session?.retryable === true) return 'Retry the review or finish this session before starting another photograph.';
   if (state.session && !sessionEnded()) return 'Finish the current session before starting another photograph.';
   if (sourceMode === 'upload' && !selectedFile) return 'Choose a RAW file to begin. Your original will be preserved.';

@@ -62,12 +62,13 @@ RPA_MODEL=gpt-6-astra RPA_MAX_EDITS=4 npm run demo
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RPA_MODEL` | `gpt-6-astra` | Model requested from the signed-in Codex CLI; it must support image input and be available to the account. |
+| `RPA_PROVIDER` | `codex-cli` | `codex-cli`, `anthropic` or `openai-compatible`; see [model evaluation](model-evaluation.md#providers) for provider settings. |
+| `RPA_MODEL` | `gpt-6-astra` | Model requested from the provider; it must support image input and be available to the account. Anthropic defaults to `claude-opus-5-5`. |
 | `RPA_MAX_EDITS` | `6` | Global editing budget, integer 1–10. |
 | `RPA_PORT` | `4318` | Local HTTP port; the server binds to `127.0.0.1`. |
 | `RPA_CODEX_BIN` | `codex` | Executable path/name when the CLI is not on the server's `PATH`. |
 
-Model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
+With the default provider, model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The other providers send the previews and the brief in one API request with no tools. If a decision fails validation, the agent asks the model once more with the validator's error (`RPA_REPAIR_ATTEMPTS`); this never touches Lightroom. Only Codex has been checked in a live Lightroom session. Run the [model evaluation](model-evaluation.md) before relying on another provider. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
 
 ## Local data and model requests
 
@@ -76,6 +77,16 @@ RAW files, Lightroom state, SQLite records, run logs, preview JPEGs, and final e
 **Rendered JPEGs, the editing brief, relevant numeric settings, public decision history, and feedback are sent through your signed-in Codex service.** The demo does not attach the RAW file to the model. Local HTTP hosting does not mean offline model processing. The account's service and data settings govern those requests.
 
 Each decision uses an ephemeral CLI invocation and a temporary working directory. Temporary decision files are removed after the call; the local candidate journal and exported previews remain for comparison and recovery. These controls are not a claim about server-side retention.
+
+## Logs and shutdown
+
+The server appends JSON Lines to `.runtime/logs/demo.log` (mode `0600`, one rotated generation at 5 MiB). It records lifecycle events, bridge online/offline changes, session status changes, rejected requests, and uncaught errors. It never records photo content, the editing brief, previews, or model output.
+
+`SIGINT`/`SIGTERM` stop the server gracefully and force the process to exit if shutdown takes longer than 10 seconds. An uncaught exception or unhandled rejection is logged and triggers the same shutdown, then exit code 1. Shutdown marks an in-flight session as interrupted and keeps `session.lock`; it never clears an uncertain Lightroom operation.
+
+## Codex CLI compatibility
+
+At startup and every minute, the demo runs `codex --version` and refuses to start a session on a CLI older than **0.153.4**, the version its `--disable` feature list was verified against. Newer versions are allowed. Run `npm run check:codex` to confirm that the installed CLI still knows every flag and feature name the demo passes (CI runs it against 0.153.4 and the latest release).
 
 ## Interruptions and recovery
 
