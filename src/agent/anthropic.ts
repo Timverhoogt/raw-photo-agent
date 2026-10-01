@@ -24,7 +24,7 @@ export interface AnthropicOptions {
 
 export class AnthropicTransport implements ModelTransport {
   readonly provider = 'anthropic';
-  readonly capabilities = { maxImages: 3, dataLeavesDevice: true };
+  readonly capabilities = { maxImages: 9, dataLeavesDevice: true };
   readonly model: string;
   private readonly effort: Effort | undefined;
   private readonly fallback: boolean;
@@ -61,7 +61,7 @@ export class AnthropicTransport implements ModelTransport {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const images = await Promise.all(request.images.map(path => encodePreview(path, this.maxImageEdge)));
+    const images = await Promise.all(request.images.map(path => encodePreview(path, request.detailImagePaths?.includes(path) ? Infinity : this.maxImageEdge)));
     let response: Anthropic.Beta.BetaMessage;
     try {
       response = await this.api().beta.messages.create({

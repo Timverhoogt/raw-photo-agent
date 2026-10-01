@@ -10,7 +10,7 @@ const UNCERTAIN_REMOTE_CODES = new Set([
 ]);
 const MUTATING_OPERATIONS = new Set([
   "import_photo", "reveal_photo",
-  "create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "adjust_mask",
+  "create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "create_background_mask", "auto_tone", "adjust_mask",
 ]);
 
 export class BridgeError extends Error {
@@ -180,7 +180,8 @@ export class FileBridge {
                 "The successful response is missing its result or also contains an error. Reconcile Lightroom state before retrying.",
                 { ...context, outcomeUncertain: true });
             }
-            await removeIfPresent(responsePath);
+            // The worker retains requests and skips IDs with an existing response.
+            // Keep this original evidence so its receipt cannot regenerate OUTCOME_UNKNOWN.
             return response.result as T;
           }
           if (!isRecord(response.error) || typeof response.error.code !== "string" || !response.error.code.trim() ||
@@ -190,7 +191,7 @@ export class FileBridge {
               "The bridge returned an invalid error response. Reconcile Lightroom state before retrying.",
               { ...context, outcomeUncertain: true });
           }
-          await removeIfPresent(responsePath);
+          // Preserve remote errors byte-for-byte for reconciliation, just like successes.
           // Prefer the peer's knowledge of whether execution began. Older peers
           // lack this field, so retain uncertainty for failed verification and
           // unclassified exceptions in operations that can change Lightroom.

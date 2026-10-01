@@ -1,7 +1,7 @@
 // Builds a synthetic evaluation fixture from one well-edited JPEG:
 //   node scripts/make-fixture.ts --input good.jpg --id heron --intent "Natural wildlife; keep feather detail" [--out fixtures]
 // Faults are sharp approximations of Lightroom slider changes. Prefer Lightroom-rendered
-// fixtures for decisions that matter; see docs/evaluation.md.
+// fixtures for decisions that matter; see docs/model-evaluation.md.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

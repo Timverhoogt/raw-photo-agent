@@ -88,6 +88,17 @@ test('explicit target and filename are required before any copy or mutation', as
   assert.deepEqual(peer.calls, ['selected']);
 });
 
+test('TIFF diagnostics keep the saved JPEG evidence and reject unsupported formats before export', async t => {
+  const { controller, store, peer } = fixture(t);
+  const { run, baseline } = await controller.start('original', 'Natural', 'selected.CR3');
+  const rendered = await controller.render(run.id, baseline.id, 2048, 'TIFF');
+  assert.match(rendered.previewPath!, /\.tif$/);
+  assert.equal(store.getCandidate(baseline.id)!.previewPath, baseline.previewPath);
+  const count = peer.calls.length;
+  await assert.rejects(controller.render(run.id, baseline.id, 2048, 'PNG' as 'TIFF'), /JPEG or TIFF/);
+  assert.equal(peer.calls.length, count);
+});
+
 test('global edit, fresh previews and native restore roundtrip returns identical pixels', async t => {
   const { controller, store } = fixture(t);
   const { run, baseline } = await controller.start('original', 'Natural', 'selected.CR3');

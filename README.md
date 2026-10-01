@@ -15,7 +15,7 @@
   <a href="#getting-started">Get started</a> ·
   <a href="docs/demo.md">Demo guide</a> ·
   <a href="docs/usage.md">CLI</a> ·
-  <a href="DESIGN.md">Architecture &amp; roadmap</a> ·
+  <a href="ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
@@ -69,15 +69,17 @@ npm run demo
 
 Open **[localhost:4318](http://127.0.0.1:4318)**. Upload a RAW/DNG (up to 200 MiB), or use the photo selected in Lightroom. Describe the intended look and begin. The final JPEG is exported at up to 8192 pixels on its long edge, without upscaling.
 
-**Data:** RAW files, catalog edits, and the editing journal stay on your Mac. Rendered previews, the editing brief, settings, and feedback go through your signed-in Codex service. Keep `.runtime/uploads` while Lightroom references its imported files. [Setup, controls, privacy, and recovery →](docs/demo.md)
+**Data:** RAW files, catalog edits, and the editing journal stay on your Mac. With the default provider, rendered previews, the editing brief, settings, and feedback go through your signed-in Codex service. Other providers use the configured model endpoint. Keep `.runtime/uploads` while Lightroom references its imported files. [Setup, controls, privacy, and recovery →](docs/demo.md)
 
 ## How it works
 
 **RAW → virtual copy → inspect → adjust → render → compare → choose**
 
-The vision model proposes a supported action. The TypeScript controller validates it, the Lua plug-in applies it through Lightroom's SDK, and Lightroom renders the RAW again. Each candidate records its settings and a native snapshot, so the agent can attempt to return to an earlier checkpoint. A state or pixel mismatch stops the session for inspection.
+The vision model proposes a supported action. The TypeScript controller validates it, the Lua plug-in applies it through Lightroom's SDK, and Lightroom renders the RAW again. Each candidate records its settings and a native snapshot, so the agent can attempt to return to an earlier checkpoint. A state or pixel mismatch stops the session for inspection. The SQLite journal retains candidate ancestry and native operation evidence. An uncertain native operation keeps the session lock and is never retried automatically.
 
-The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVIDER` can switch it to the Claude API or an OpenAI-compatible endpoint, including a local vision model; only Codex has been checked in a live session. [Evaluate a model](docs/evaluation.md) against measurable thresholds before using it. The [manual CLI](docs/usage.md) also works without a model. For agent-led sessions outside the browser, use the [editing workflow](EDITING_WORKFLOW.md).
+Each checkpoint also saves a Lightroom export up to 8192 pixels on its long edge. The agent can request matching detail regions to inspect texture, sharpening, and noise; the browser lets you compare those same regions before and after. These crops show export pixels, which can be smaller than the sensor image for large RAWs.
+
+The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVIDER` can switch it to the Claude API or an OpenAI-compatible endpoint, including a local vision model; only Codex has been checked in a live session. [Evaluate a model](docs/model-evaluation.md) against measurable thresholds before using it. The [manual CLI](docs/usage.md) also works without a model. For agent-led sessions outside the browser, use the [editing workflow](EDITING_WORKFLOW.md).
 
 ## Current status
 
@@ -86,9 +88,25 @@ The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVI
 | Available in the browser | Outside the autonomous demo |
 | --- | --- |
 | Global tone, white balance, color, sharpening, and conventional noise reduction | Automatic cropping, mask creation/local editing, and AI Denoise |
-| Progress notes, pause/finish, creative questions, and final selection | Independent judging agents and batch editing |
+| Progress notes, elapsed review time, safe review retry, pause/finish, creative questions, and final selection | Independent judging agents and batch editing |
+| Agent-requested detail inspection and synchronized before/after regions | Automatic crop mapping across different compositions |
 
-The manual workflow can capture crops and adjust an existing mask. **Exact mask rollback remains unresolved**, and photographic quality needs broader evaluation. See the [live validation record](LIVE_VALIDATION.md) for measured results and the [roadmap](DESIGN.md) for planned work.
+The manual workflow can capture crops and adjust an existing mask. Native subject/background mask creation and a guarded existing-mask agent loop are implemented for controlled validation; **autonomous demo masking stays disabled**. Native settings restored exactly in the recorded trials, but **exact pixel recovery remains unverified**. See the [restoration experiments](docs/restoration-validation.md), [render repeatability controls](docs/render-repeatability.md), [live validation record](LIVE_VALIDATION.md), and [roadmap](ROADMAP.md).
+
+The local [RAW quality evaluation](docs/evaluation.md) indexes RAW/XMP hashes, runs separate working copies, produces blinded comparison pages, and records explicit photographer preferences. Completed exports establish integration behavior; they do not establish a quality win without actual photographer votes.
+
+### Progress — 1 October 2026
+
+| Roadmap work | Verified progress |
+| --- | --- |
+| Provider support and detail inspection | Integrated provider selection, matched detail crops, and evidence-capacity checks. [Model evaluation](docs/model-evaluation.md) and [RAW quality evaluation](docs/evaluation.md) have separate workflows. |
+| Lightroom recovery guards | Added bounded copy-selection waits, strict import-state checks, and one to three measured edit/restore cycles with explicit mask selection before each cycle. |
+| Native restoration trials | Completed subject and background trials: **60 TIFFs, 206 pixel comparisons, and eight exact native-settings restorations**. Original and staged RAW/XMP hashes remained unchanged. |
+| Automated validation | **196 Node tests and 199 Lua 5.1 checks passed**, alongside TypeScript and Codex CLI compatibility checks. CI covers Node.js 24 and 26. |
+
+All 206 pixel comparisons were nonexact, including unchanged-render controls; every edit/restore cycle therefore remains unverified for pixel recovery. The [trial results and limits](docs/restoration-validation.md#three-cycle-live-trials--1-october-2026) retain the evidence for each scene. These trials do not establish a photographic quality improvement.
+
+Next on the [roadmap](ROADMAP.md): diagnose the earlier import-state drift, test deliberately retained native edit residuals, broaden scene and mask-boundary checks, and collect blinded photographer votes. Autonomous local editing remains gated on recovery evidence; composition assistance, independent critique, and batch editing remain later milestones.
 
 ## Documentation & development
 
@@ -97,7 +115,10 @@ The manual workflow can capture crops and adjust an existing mask. **Exact mask 
 | [Local demo](docs/demo.md) | Setup, controls, configuration, and recovery |
 | [CLI reference](docs/usage.md) | Commands, snapshots, masks, and interruption handling |
 | [Editing workflow](EDITING_WORKFLOW.md) | Assessing a photo, iterating, and getting useful feedback |
-| [Architecture](DESIGN.md) | Controller, Lightroom bridge, and roadmap |
+| [Roadmap](ROADMAP.md) | Next milestone, later capabilities, and quality acceptance gates |
+| [RAW quality evaluation](docs/evaluation.md) | Repeatable RAW/XMP trials, blinded comparisons, and photographer votes |
+| [Model evaluation](docs/model-evaluation.md) | Provider configuration, decision probes, and measured thresholds |
+| [Architecture](DESIGN.md) | Controller, Lightroom bridge, and planned interfaces |
 | [Native plug-in](plugin/README.md) | Protocol and supported Lightroom operations |
 | [Contributing](CONTRIBUTING.md) | Development and meaningful bug reports |
 
@@ -105,10 +126,10 @@ The manual workflow can capture crops and adjust an existing mask. **Exact mask 
 npm run check
 npm test
 npm run check:codex   # needs the Codex CLI on PATH
-npm run eval -- run --dry-run   # plan a model evaluation; see docs/evaluation.md
+npm run eval -- run --dry-run   # plan a model evaluation; see docs/model-evaluation.md
 ```
 
-CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus the [Lua 5.1 contract tests](plugin/RawPhotoAgent.lrplugin/tests/README.md). Mocked tests do not establish native Lightroom behavior or photographic quality.
+CI checks TypeScript and the controller/demo tests on Node.js 24 and 26, plus the [Lua 5.1 contract tests](plugin/RawPhotoAgent.lrplugin/tests/README.md). Tests cover provider validation, detail evidence, session controls, 16-bit mask diagnostics, corpus integrity, blinded review, and recovery. Mocked tests do not establish native Lightroom behavior or photographic quality.
 
 First-party code is [MIT licensed](LICENSE). The example photograph has separate [source credit and rights](docs/example.md#photo-source).
 

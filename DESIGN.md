@@ -28,7 +28,7 @@ The current global-edit budget defaults to six, configurable from 1–10 through
 
 Native operations are serialized. The demo owns an editing-session lock through pauses and final choices. Uncertain native failures retain that lock and do not trigger automatic retries. After a crash, the saved run is interrupted and does not resume itself. Photos, previews, runtime state, and machine-specific configuration remain outside Git; JPEGs and the brief are sent through the signed-in Codex service. Local hosting does not make model processing offline.
 
-The guided single-photo workflow and one browser loop have passed live trials, with the limitations recorded above. Offline checks comprise 81 TypeScript tests and 104 Lua checks; mocks do not establish image quality or native correctness. Next priorities are a varied photographic evaluation set, exact mask pixel restoration, and detail-aware review before extending autonomous crop/local operations. Automatic mask creation, AI Denoise, MCP, and independent judges are not implemented. Existing-mask exposure and texture remain guarded manual CLI operations.
+The guided single-photo workflow and browser loops have passed live trials, with the limitations recorded above. Detail-aware model review, synchronized detail comparison, and safe provider-review retry are implemented. Offline checks comprise 102 TypeScript tests and 104 Lua checks; mocks do not establish image quality or native correctness. The next milestone is selective editing with verified recovery, alongside a varied photographic evaluation set. Unchanged JPEG exports also exhibit small differences, so restoration verification needs a repeatability investigation before extending autonomous crop/local operations. Automatic mask creation, AI Denoise, MCP, and independent judges are not implemented. Existing-mask exposure and texture remain guarded manual CLI operations. See [ROADMAP.md](ROADMAP.md) for the current milestone sequence and acceptance gates.
 
 See the [demo guide](docs/demo.md) for setup, plugin reload/Start / Status steps, controls, privacy, and recovery. Follow [EDITING_WORKFLOW.md](EDITING_WORKFLOW.md) for supervised editing through the manual CLI. A future API host can reuse the same controller; it must supply any computer-use adapter itself. Judges should begin in an observational mode after human evaluation.
 
@@ -46,7 +46,7 @@ Default direction: natural photographic rendering that preserves scene content. 
 
 ## Human feedback: current subset and roadmap
 
-The demo accepts an initial brief, up to two creative questions with two or three options, pause/resume, finish, and a final selection among up to three retained versions. It does not yet implement all the richer interactions below, such as crop alternatives, synchronized detail comparison, or combining choices into a new refinement. These are proposed interactions, chosen and worded to suit the actual image:
+The demo accepts an initial brief, up to two creative questions with two or three options, pause/resume, finish, synchronized detail comparison, and a final selection among up to three retained versions. It does not yet implement all the richer interactions below, such as crop alternatives or combining choices into a new refinement. These are proposed interactions, chosen and worded to suit the actual image:
 
 | Moment | Example choices | What is shown |
 |---|---|---|
@@ -142,7 +142,7 @@ Browser: upload/selection + brief + controls + candidate comparison
                                    RAW render + editable virtual copy
 ```
 
-The manual CLI uses the same controller. The model receives the current overview JPEG and up to two comparison JPEGs, including the immediate parent when available, current supported settings, and the editing intention. The demo does not yet send full-resolution detail crops; those remain available in the supervised CLI workflow and are planned for automatic review. The native Lightroom window displays actual operations independently of the browser.
+The manual CLI uses the same controller. The model receives the current overview JPEG and up to two comparison JPEGs, including the immediate parent when available, current supported settings, and the editing intention. Each current checkpoint saves an additional export capped at 8192 pixels. The agent can choose one or two detail regions, which are extracted at the same coordinates from every saved export and attached to subsequent reviews. Matching detail evidence is required for texture, sharpening, and noise-reduction changes. These are native export pixels, not guaranteed full sensor resolution. The browser compares matching regions with synchronized panning. Failed provider inspections can be retried from the same saved checkpoint; native failures remain subject to reconciliation. The native Lightroom window displays actual operations independently of the browser.
 
 RAW sensor files are developed by Lightroom. The model receives rendered images rather than the RAW file. Public notes describe decisions for the photographer, not hidden internal reasoning. A future computer-use adapter would be separate from this bounded demo path.
 

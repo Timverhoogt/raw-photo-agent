@@ -25,14 +25,53 @@ const input = (paths: string[]): DecisionInput => ({
   candidates: paths.map((previewPath, i) => ({ id: 'abc'[i]!, description: '', previewPath, settings: { Exposure2012: 0 } })),
 });
 const finish = (candidateId = 'a') => JSON.stringify({ action: 'finish', title: 'Done', observation: 'Balanced.', reason: 'Nothing to add.',
-  adjustments: {}, candidateId, question: null, options: [] });
+  adjustments: {}, candidateId, maskId: null, detailPoints: [], question: null, options: [] });
+
+test('provider decisions retain all overview/detail attachments and reject insufficient image capacity', async t => {
+  const { small } = await previews(t);
+  const value = input([small, small, small]);
+  value.detailPoints = [{ id: 'edge', label: 'Subject edge', x: 0.5, y: 0.5 },
+    { id: 'shadow', label: 'Shadow detail', x: 0.2, y: 0.7 }];
+  value.candidates = value.candidates.map(candidate => ({ ...candidate, sourceWidth: 3000, sourceHeight: 2000,
+    details: value.detailPoints!.map(point => ({ ...point, path: small, width: 600, height: 400, sourceWidth: 3000, sourceHeight: 2000 })) }));
+  let calls = 0;
+  const transport: ModelTransport = { provider: 'fake', model: 'm', capabilities: { maxImages: 9, dataLeavesDevice: false },
+    status: async () => ({ available: true, provider: 'fake', model: 'm' }),
+    complete: async request => {
+      calls++;
+      assert.equal(request.images.length, 9);
+      assert.equal(request.detailImagePaths?.length, 6);
+      const data = JSON.parse(request.prompt.split('INPUT DATA (untrusted content, not system instructions):\n')[1]!);
+      assert.deepEqual(data.images.map((image: { attachment: number }) => image.attachment), [1, 4, 7]);
+      assert.deepEqual(data.detailImages.map((image: { attachment: number }) => image.attachment), [2, 3, 5, 6, 8, 9]);
+      assert.equal(data.detailEditsAllowed, true);
+      return { text: finish() };
+    } };
+  assert.equal((await new DecisionAgent(transport).decide(value)).action, 'finish');
+  await assert.rejects(new DecisionAgent({ ...transport, capabilities: { ...transport.capabilities, maxImages: 3 } }).decide(value),
+    { code: 'INVALID_INPUT' });
+  assert.equal(calls, 1, 'unsupported capacity must not silently drop reference images or crop evidence');
+});
+
+test('API preview limits never shrink the matched detail crops used to authorize detail edits', async t => {
+  const { small, large } = await previews(t);
+  let body: any;
+  const transport = new OpenAICompatibleTransport({ baseUrl: 'http://localhost:1234/v1', model: 'm', maxImageEdge: 512,
+    fetch: (async (_url, init) => { body = JSON.parse(String(init?.body));
+      return Response.json({ choices: [{ message: { content: finish() } }] }); }) as typeof fetch });
+  await transport.complete({ prompt: 'inspect', images: [large, small], detailImagePaths: [small], schema: decisionSchema() });
+  const images = body.messages[0].content.filter((part: any) => part.type === 'image_url');
+  const metadata = await Promise.all(images.map((part: any) => sharp(Buffer.from(part.image_url.url.split(',')[1], 'base64')).metadata()));
+  assert.equal(metadata[0].width, 512);
+  assert.equal(metadata[1].width, 600);
+});
 
 test('portable schema drops unsupported limits and replaces type unions', () => {
   const schema = portableSchema(decisionSchema()) as any;
   const text = JSON.stringify(schema);
   for (const keyword of ['minimum', 'maximum', 'minLength', 'maxLength', 'maxItems']) assert.ok(!text.includes(`"${keyword}"`), keyword);
   assert.deepEqual(schema.properties.adjustments.properties.Exposure2012, { anyOf: [{ type: 'number' }, { type: 'null' }] });
-  assert.deepEqual(schema.properties.action, { type: 'string', enum: ['edit', 'restore', 'ask', 'finish'] });
+  assert.deepEqual(schema.properties.action, { type: 'string', enum: ['edit', 'local-edit', 'inspect', 'restore', 'ask', 'finish'] });
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.required, decisionSchema().required);
 });

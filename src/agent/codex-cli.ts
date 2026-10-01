@@ -110,7 +110,7 @@ export interface CodexPhotoAgentOptions extends CodexTransportOptions, DecisionA
 
 export class CodexTransport implements ModelTransport {
   readonly provider = 'codex-cli';
-  readonly capabilities = { maxImages: 3, dataLeavesDevice: true };
+  readonly capabilities = { maxImages: 9, dataLeavesDevice: true };
   readonly model: string;
   private readonly binary: string;
   private readonly timeoutMs: number;

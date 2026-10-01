@@ -1,4 +1,4 @@
-// Scores a model provider against tiers 0–2. See docs/evaluation.md.
+// Scores a model provider against tiers 0–2. See docs/model-evaluation.md.
 //   node scripts/eval.ts run    --fixtures fixtures [--provider anthropic --model claude-opus-5-5] [--dry-run]
 //   node scripts/eval.ts report results/eval-a.json results/eval-b.json
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -39,7 +39,7 @@ async function run() {
   for (const probe of probes) if (!PROBES.includes(probe)) throw new Error(`Unknown probe ${probe}. Use: ${PROBES.join(', ')}.`);
   let fixtures = await loadFixtures(values.fixtures!);
   if (values.limit) fixtures = fixtures.slice(0, integer('limit', values.limit, 1, 10_000));
-  if (!fixtures.length) throw new Error(`No fixtures in ${values.fixtures}. See docs/evaluation.md.`);
+  if (!fixtures.length) throw new Error(`No fixtures in ${values.fixtures}. See docs/model-evaluation.md.`);
   const repeats = integer('repeats', values.repeats, 1, 20);
   const cases = planCases(fixtures, { probes, repeats, repeatFaults: integer('repeat-faults', values['repeat-faults'], 0, 100) });
   const agent = createPhotoAgent(process.env, {
@@ -87,7 +87,7 @@ const command = positionals.shift();
 try {
   if (command === 'run') await run();
   else if (command === 'report') await report();
-  else process.stdout.write('Usage: node scripts/eval.ts run [--fixtures DIR] [--provider P] [--model M] [--dry-run]\n       node scripts/eval.ts report RESULT.json [...]\nSee docs/evaluation.md.\n');
+  else process.stdout.write('Usage: node scripts/eval.ts run [--fixtures DIR] [--provider P] [--model M] [--dry-run]\n       node scripts/eval.ts report RESULT.json [...]\nSee docs/model-evaluation.md.\n');
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;

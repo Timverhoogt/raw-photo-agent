@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -9,20 +9,32 @@ import { BridgeError, FileBridge } from "../src/bridge.ts";
 
 type Request = { protocolVersion: number; id: string; operation: string; params: Record<string, unknown>; issuedAt: number; deadlineAt: number };
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
+// Response/protocol tests must not race CPU-heavy native image diagnostics.
+// The dedicated timeout test below supplies its own short deadline.
+const PEER_TIMEOUT_MS = 5_000;
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "lightroom-bridge-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  return { directory, bridge: new FileBridge(directory, { timeoutMs: 1_000, pollMs: 5 }) };
+  return { directory, bridge: new FileBridge(directory, { timeoutMs: PEER_TIMEOUT_MS, pollMs: 5 }) };
 }
 
 async function nextRequest(directory: string): Promise<Request> {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + PEER_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
       const names = await readdir(join(directory, "requests"));
-      const request = names.find((name) => name.endsWith(".json"));
-      if (request) return JSON.parse(await readFile(join(directory, "requests", request), "utf8"));
+      // Mirror Bridge.lua: completed requests stay as history and their
+      // immutable response keeps the worker from executing them again.
+      for (const name of names.filter(name => name.endsWith(".json"))) {
+        try {
+          await stat(join(directory, "responses", name));
+          continue;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        return JSON.parse(await readFile(join(directory, "requests", name), "utf8"));
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -34,8 +46,7 @@ async function nextRequest(directory: string): Promise<Request> {
 async function respond(directory: string, request: Request, response: unknown) {
   const temporary = join(directory, "responses", `${request.id}.tmp`);
   await writeFile(temporary, typeof response === "string" ? response : JSON.stringify(response), { mode: 0o600 });
-  // The peer consumes the request; clients never delete a submitted request themselves.
-  await unlink(join(directory, "requests", `${request.id}.json`));
+  // Preserve submitted requests as native worker history.
   await rename(temporary, join(directory, "responses", `${request.id}.json`));
 }
 
@@ -48,7 +59,7 @@ test("atomic request roundtrip validates the protocol and private permissions", 
     assert.equal(request.operation, "set_exposure");
     assert.deepEqual(request.params, { exposure: 0.25 });
     assert.ok(request.issuedAt <= Date.now());
-    assert.equal(request.deadlineAt - request.issuedAt, 1_000);
+    assert.equal(request.deadlineAt - request.issuedAt, PEER_TIMEOUT_MS);
     for (const path of [directory, join(directory, "requests"), join(directory, "responses")]) {
       assert.equal((await stat(path)).mode & 0o777, 0o700);
     }
@@ -56,11 +67,15 @@ test("atomic request roundtrip validates the protocol and private permissions", 
       assert.equal((await stat(path)).mode & 0o777, 0o600);
     }
     assert.deepEqual(await readdir(join(directory, "requests")), [`${request.id}.json`]);
-    await respond(directory, request, { protocolVersion: 1, id: request.id, ok: true, result: { exposure: 0.25 } });
+    const raw = `${JSON.stringify({ protocolVersion: 1, id: request.id, ok: true, result: { exposure: 0.25 } }, null, 2)}\n`;
+    await respond(directory, request, raw);
+    return { request, raw };
   })();
   assert.deepEqual(await bridge.call("set_exposure", { exposure: 0.25 }), { exposure: 0.25 });
-  await peer;
-  assert.deepEqual(await readdir(join(directory, "responses")), []);
+  const { request, raw } = await peer;
+  assert.deepEqual(await readdir(join(directory, "responses")), [`${request.id}.json`]);
+  assert.equal(await readFile(join(directory, "responses", `${request.id}.json`), "utf8"), raw);
+  assert.deepEqual(await readdir(join(directory, "requests")), [`${request.id}.json`]);
   assert.ok(!(await readdir(directory)).includes("call.lock"));
 });
 
@@ -80,12 +95,56 @@ test("remote errors retain the peer's code and message", async (t) => {
   await peer;
 });
 
+test("consumed successes and remote errors remain immutable while subsequent calls proceed without retry", async (t) => {
+  const { directory, bridge } = await fixture(t);
+  const scenarios: Array<{ operation: string; result?: unknown; error?: { code: string; message: string; outcomeUncertain: boolean; details: unknown } }> = [
+    { operation: "apply", result: { stateToken: "edited" } },
+    { operation: "create_working_copy", error: { code: "TARGET_CHANGED", message: "Copy selection changed.", outcomeUncertain: true, details: { createdPhotoId: "copy-2" } } },
+    { operation: "apply", error: { code: "INVALID_ADJUSTMENT", message: "Rejected before editing.", outcomeUncertain: false, details: { field: "Exposure2012" } } },
+    { operation: "read_state", result: { photoId: "copy-2", stateToken: "unchanged" } },
+  ];
+  const evidence = new Map<string, string>();
+  for (const scenario of scenarios) {
+    const peer = (async () => {
+      const request = await nextRequest(directory);
+      assert.equal(request.operation, scenario.operation);
+      assert.equal(evidence.has(request.id), false, "Never resubmit an already-consumed request");
+      const response = scenario.error
+        ? { protocolVersion: 1, id: request.id, ok: false, error: scenario.error }
+        : { protocolVersion: 1, id: request.id, ok: true, result: scenario.result };
+      const raw = `${JSON.stringify(response, null, 2)}\n`;
+      evidence.set(request.id, raw);
+      await respond(directory, request, raw);
+      return request.id;
+    })();
+    const call = scenario.error
+      ? assert.rejects(bridge.call(scenario.operation), (error: unknown) => {
+        assert.ok(error instanceof BridgeError);
+        assert.equal(error.code, scenario.error!.code);
+        assert.equal(error.message, scenario.error!.message);
+        assert.equal(error.outcomeUncertain, scenario.error!.outcomeUncertain);
+        assert.equal(error.operation, scenario.operation);
+        assert.ok(evidence.has(error.requestId!));
+        return true;
+      })
+      : bridge.call(scenario.operation).then(result => assert.deepEqual(result, scenario.result));
+    await Promise.all([call, peer]);
+    const expectedNames = [...evidence.keys()].map(id => `${id}.json`).sort();
+    assert.deepEqual((await readdir(join(directory, "requests"))).sort(), expectedNames, "Exactly one submitted request per explicit call");
+    assert.deepEqual((await readdir(join(directory, "responses"))).sort(), expectedNames);
+    for (const [id, raw] of evidence) {
+      assert.equal(await readFile(join(directory, "responses", `${id}.json`), "utf8"), raw, "Preserve the original payload and formatting after later calls");
+    }
+    assert.ok(!(await readdir(directory)).includes("call.lock"));
+  }
+});
+
 test("remote uncertainty honors explicit flags and conservatively handles older peers", async (t) => {
   const cases = [
     ...["VERIFY_FAILED", "RESTORE_UNVERIFIED", "OUTCOME_UNKNOWN", "RENDER_STALE"].map(code => ({
       operation: "apply", error: { code, message: "Inspect the current photo." }, expected: true,
     })),
-    ...["create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "adjust_mask"].map(operation => ({
+    ...["create_working_copy", "checkpoint", "apply", "restore", "create_subject_mask", "create_background_mask", "auto_tone", "adjust_mask"].map(operation => ({
       operation, error: { code: "INTERNAL_ERROR", message: "Unexpected exception." }, expected: true,
     })),
     { operation: "read_state", error: { code: "INTERNAL_ERROR", message: "Read failed." }, expected: false },

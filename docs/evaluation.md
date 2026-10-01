@@ -1,133 +1,81 @@
-# Model evaluation
+# Repeatable RAW quality checks
 
-Before a model drives the demo, `scripts/eval.ts` checks that it clears three tiers. Each tier has a bar a model must pass:
+This guide covers complete Lightroom editing trials and photographer preferences. For provider settings and isolated model decision probes, see [model evaluation](model-evaluation.md).
 
-| Tier | Question | Measured by | Default bar |
-| --- | --- | --- | --- |
-| **0 · Hard gates** | Can it take part at all? | Every call in the run | Valid decision on the first try ≥ 97%; after one repair ≥ 99.5%; p95 latency ≤ 60 s; accepts 3 images per request |
-| **1 · Perception** | Does it see known faults and fix them the right way? | `pick-better`, `fix-fault` | ≥ 90% on obvious faults, ≥ 70% on subtle ones |
-| **2 · Restraint** | Does it leave good work alone, and decide the same way twice? | `keep-better`, `leave-alone`, repeats | Each ≥ 80% |
+The evaluation harness keeps an indexed local corpus and compares **as-imported starting image**, **fixed gentle adjustment**, and **agent result**. A successful run establishes that real edits and exports completed. Photographic improvement requires actual photographer preferences; the runner never records those preferences or answers a creative question for you.
 
-A tier reads **INSUFFICIENT** when it has too few samples to judge (under 30 calls, 10 tier 1 items, or 5 items per restraint probe) and **NOT-MEASURED** when its probes did not run.
+## Index the corpus
 
-The harness does not measure tier 3, taste: whether you prefer the model's finished edit. That needs a blind A/B review by the photographer. Tier 2 also uses single decisions as a proxy for restraint; it does not run full Lightroom sessions.
-
-## Quick start
+From the repository root, using Node.js 24+:
 
 ```sh
-# 1. Build a fixture from a JPEG you consider well edited (repeat for 10+ photos).
-node scripts/make-fixture.ts --input ~/Pictures/heron-final.jpg --id heron \
-  --intent "Natural wildlife; keep feather detail and the soft habitat"
-
-# 2. See how many decisions a run needs, without calling a model.
-node scripts/eval.ts run --provider anthropic --model claude-opus-5-5 --dry-run
-
-# 3. Run it. Results are written to results/ (ignored by Git).
-node scripts/eval.ts run --provider anthropic --model claude-opus-5-5
-
-# 4. Compare models side by side.
-node scripts/eval.ts report results/eval-*.json
+node src/evaluation/cli.ts index --source RAW
+node src/evaluation/cli.ts list
+node src/evaluation/cli.ts status
 ```
 
-Each fixture with the 11 synthetic faults needs **46 decisions** at the default settings. Some decisions add a repair call. Start with `--limit 3` to check setup and cost before a full run; the scorecard reports the tokens actually used. `Ctrl-C` stops the run and still writes a partial scorecard.
+Indexing is local and read-only with respect to `RAW`. It records SHA-256 hashes and byte sizes for every regular file, stable RAW asset IDs, matching XMP sidecars, and reference/other files such as JPEGs. Repeating the index reports `unchanged: true` for the same file paths and bytes; changing an XMP also changes the corpus fingerprint. Previous manifests remain in `.runtime/evaluation/corpora/`. Symlinked corpus files and ambiguous duplicate sidecars are rejected.
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `--fixtures DIR` | `fixtures` | Folder of fixture folders |
-| `--provider`, `--model` | from `RPA_PROVIDER`, `RPA_MODEL` | Provider and model under test |
-| `--limit N` | all | Use only the first N fixtures |
-| `--probes LIST` | all four | Comma-separated subset of `pick-better,fix-fault,keep-better,leave-alone` |
-| `--repeats N` | `5` | Calls per repeated item, used for the repeatability score |
-| `--repeat-faults N` | `2` | How many faults per fixture repeat `pick-better` |
-| `--repair N` | `1` | Repair calls after an invalid decision (0–2), as in the demo |
-| `--concurrency N` | `2` | Parallel calls; lower it on rate limits |
-| `--thresholds FILE` | built in | JSON overrides, such as `{"tier1": {"subtle": 0.6}}` |
-| `--out FILE` | `results/eval-<provider>-<model>-<time>.json` | Result file |
+Matching XMP is deliberately **copied with its RAW**. The runner does not reset development settings. Its starting render therefore means “as imported into Lightroom with this copied sidecar and the active import defaults,” not an untouched/reset RAW. Native settings for both comparator and agent baselines must match and are retained with the evidence. Use a separately named, deliberately prepared corpus if a reset-RAW experiment is needed; do not delete sidecars from this source set to make an informal baseline.
 
-## Providers
+## Run a bounded evaluation
 
-The demo and the harness share these settings. `codex-cli` remains the default.
-
-| `RPA_PROVIDER` | Model | Credentials | Previews leave this computer? |
-| --- | --- | --- | --- |
-| `codex-cli` | `RPA_MODEL`, default `gpt-6-astra` | `codex login` | Yes |
-| `anthropic` | `RPA_MODEL`, default `claude-opus-5-5` | `ANTHROPIC_API_KEY` or `ant auth login` | Yes |
-| `openai-compatible` | `RPA_MODEL` (required) | `RPA_API_KEY` if the endpoint needs one | Only if `RPA_BASE_URL` is not on this computer |
+Finish or reconcile the existing demo session first; all editing shares `.runtime/session.lock`. The Lightroom bridge and signed-in Codex CLI must already work, as described in [demo.md](demo.md).
 
 ```sh
-# A local vision model in Ollama: nothing leaves the Mac.
-RPA_PROVIDER=openai-compatible RPA_BASE_URL=http://127.0.0.1:11434/v1 RPA_MODEL=<vision model> \
-  node scripts/eval.ts run
-
-# OpenRouter or another hosted endpoint.
-RPA_PROVIDER=openai-compatible RPA_BASE_URL=https://openrouter.ai/api/v1 RPA_API_KEY=... RPA_MODEL=<model> \
-  node scripts/eval.ts run
+node src/evaluation/cli.ts run --limit 3 --max-edits 2
+# Or choose exact asset IDs printed by list:
+node src/evaluation/cli.ts run --id raw-ASSET_ID --max-edits 2
 ```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `RPA_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible endpoint. Plain `http` is accepted only for this computer. |
-| `RPA_STRUCTURED_OUTPUT` | `json_schema` | `json_object` or `none` for servers without schema-constrained output. The schema is then described in the prompt. |
-| `RPA_MAX_IMAGE_EDGE` | `2048` | Downscale larger previews before sending them to an OpenAI-compatible endpoint |
-| `RPA_EFFORT` | `high` | Claude effort level (`low`–`max`); ignored for Haiku |
-| `RPA_REPAIR_ATTEMPTS` | `1` | Extra calls after an invalid decision (0–2) |
-| `RPA_TIMEOUT_MS` | `180000` | Per-call time limit |
+Native runs require explicit `--limit` or `--id`, accept 1–10 photos, and run serially. `--intent` and `--model` override the recorded brief and model. The default brief requests natural, restrained improvement and the default model follows `RPA_MODEL` or `gpt-6-astra`.
 
-For Claude models that support it, the demo turns on server-side refusal fallback: if a safety classifier declines, Anthropic retries the request on a recommended model. **The harness turns it off**, so every scored decision comes from the model under test; a decline counts as a failed call.
+For each asset, the runner verifies and copies the RAW and its matching XMP into a fresh `.runtime/uploads/<UUID>/` folder. Lightroom imports that copy and creates separate virtual copies for the fixed comparator and agent. Original corpus files are never opened for writing. Imported files remain available because Lightroom continues to reference them.
 
-## How grading works
+The **fixed-gentle-v1 comparator** adds −20 Highlights, +15 Shadows, and +5 Vibrance to the starting numeric settings, clamping each to its supported range. It is deterministic, image-independent, and explicitly **not Lightroom Auto**. It is a modest reproducible reference, not a claim of optimal editing. If clamping makes every delta ineffective, its actual starting render is retained as the fixed comparator.
 
-For each fixture, the harness compares a **reference** render (a good edit) with **fault** renders (the same photo with one known slider change).
+The agent uses the real `PhotoController`, Codex vision provider, decision validation, overview exports and detail-crop evidence. It can inspect, globally edit, restore, and finish within the bounded decision/edit limits. Unsupported local editing is rejected by this harness. The recorded agent result is the model's current checkpoint when it finishes; no photographer choice is synthesized. If the agent asks a creative question, that case remains incomplete with the question and options saved. The batch stops for attention instead of choosing an answer.
 
-- **`pick-better`**: the latest edit is a fault. The two earlier checkpoints are the reference and a different fault, in shuffled order. The model passes if it restores the reference.
-- **`fix-fault`**: only the fault is shown. The model passes if it edits a slider that fixes the fault in the right direction and changes no faulted slider the wrong way. Magnitude is not graded. For example, overexposure is fixed by lowering Exposure, Highlights or Whites; add a `fix` list in the manifest to change the accepted moves.
-- **`keep-better`**: the latest edit is the reference and the earlier checkpoint is a fault. The model passes if it does not restore the fault and any edit stays small.
-- **`leave-alone`**: only the reference is shown. The model passes if it finishes, asks, or makes a small edit.
+Results, operation history, decisions, timings and an isolated SQLite journal are saved under `.runtime/evaluation/runs/<EVAL_ID>/`. Native JPEGs remain directly under `.runtime/renders/` to satisfy the plugin's export allowlist; result records bind each path to a SHA-256 hash, role, candidate, native state token and settings. The runner never loads or overwrites `.runtime/demo/session.json`. Model usage is recorded as unavailable (`null`) because the current provider does not expose reliable accounting here.
 
-A small edit changes each slider by at most 0.35 EV of exposure, 400 K of temperature, 8 of tint, or 15 on a 100-point slider. The scorecard also counts **overprocessing**: any edit that raises Saturation, Vibrance, Clarity, Texture, Dehaze or Contrast by more than 25.
+Only the `run` command invokes Lightroom or the model. Rendered image evidence, the editing brief, numeric settings and public history are sent through the signed-in Codex service; RAW files and sidecar bytes are not attached to model calls. Indexing and review packaging are local operations.
 
-Three rules keep the test fair:
+## Make a blinded review
 
-- **Pixels only.** Every candidate shows the same displayed slider values, so the model must judge by pixels.
-- **No name hints.** Candidate IDs are opaque hashes. Before each call, previews are copied to files named after those IDs, so a filename such as `overexposed.jpg` never reaches the model.
-- **Invalid counts as wrong.** An invalid decision fails the probe.
+Use the evaluation ID returned by a completed or partial run:
 
-Scores average an item's repeats first, so repeated items do not outweigh the others. The repeatability score counts an item as consistent when at least 80% of its calls reach the same outcome (for example, "restore the reference").
-
-## Fixtures
-
-```text
-fixtures/heron/
-  fixture.json
-  reference.jpg
-  overexposed.jpg
-  ...
+```sh
+node src/evaluation/cli.ts review --run eval-UUID
 ```
 
-```json
-{
-  "id": "heron",
-  "intent": "Natural wildlife; keep feather detail and the soft habitat",
-  "source": "lightroom",
-  "reference": { "file": "reference.jpg", "settings": { "Exposure2012": 0.15, "Temperature": 5200, "Tint": 4 } },
-  "faults": [
-    { "id": "overexposed", "file": "overexposed.jpg", "severity": "obvious", "delta": { "Exposure2012": 2 } },
-    { "id": "too-warm", "file": "too-warm.jpg", "severity": "subtle", "delta": { "Temperature": 800 },
-      "fix": [{ "key": "Temperature", "direction": "decrease" }] }
-  ]
-}
+The command returns the local `review/index.html` path. Open that page and compare versions A/B/C. Only complete cases containing all three verified real renders are included; pending, interrupted and unanswered cases remain explicitly excluded. A retained starting image is a valid agent result and may look identical to another version.
+
+The page and public case manifest contain opaque case/candidate IDs without source filenames or variant roles. Candidate and case order are deterministic for the saved private seed; `--seed` can reproduce that ordering in a fresh package. Metadata-free PNGs preserve the decoded pixels of the saved Lightroom JPEGs; no synthetic alternatives, upscaling or aesthetic scores are generated. Images link to their full exported size. Review overviews are at most 2048 pixels on the long edge, not full sensor resolution; detail exports used during editing are separately retained.
+
+`private.json`, next to the `review` directory, contains the seed and role mapping. Keep it out of view while judging. If sharing a review folder, share only its `review/` subdirectory. Blinding hides the variant labels and metadata; it does not promise that recognizable photographic changes cannot suggest their origin.
+
+Click a preference, “No visible preference,” or “None acceptable,” and enter optional notes about defects or unnecessary edits. The page prepares a shell-safe command and updates it when reviewer/notes change. It does not itself submit a vote. Run the command or have the assistant record the choice you explicitly gave:
+
+```sh
+node src/evaluation/cli.ts vote --review review-ID --case case-ID --candidate candidate-ID --reviewer photographer --notes 'Better subject detail; color remains natural.'
 ```
 
-`reference.settings` sets the slider values shown to the model. Temperature, sharpening and noise reduction have no zero default, so give their reference value whenever a fault uses them.
+Use `--candidate tie` for no visible preference or `--candidate none` when no result is acceptable. Votes are bound to the exact package, case, opaque candidate and named reviewer, with a timestamp. Each reviewer gets one immutable answer per case. Repeating the identical command returns the existing answer; changing it is rejected. No automated votes or default selections exist. These review records do not change Lightroom or select a final demo export.
 
-**Synthetic fixtures** (`make-fixture.ts`) approximate 11 Lightroom changes with `sharp`: ±2 EV exposure, oversaturation, ±3000 K white balance, crushed blacks, heavy clarity, plus four subtle versions. They are quick to make but are not Lightroom renders. The scorecard says so when any fixture is synthetic.
+After judging, generate a local administrative report that reveals the role mappings:
 
-**Lightroom fixtures** are the ones to trust. For each photo:
+```sh
+node src/evaluation/cli.ts summarize --review review-ID
+```
 
-1. Export your finished edit as `reference.jpg` (sRGB, long edge 2048).
-2. For each fault, make a virtual copy, change one slider by the fault's `delta`, and export it at the same size.
-3. Write `fixture.json` with `"source": "lightroom"`.
+The report includes completed/excluded case counts, actual human answer counts by starting/fixed/agent role plus tie/none, and the recorded observations. With no answers it explicitly returns `preferenceNotYetMeasured: true`; completed exports never become assumed preferences. Counts are per recorded reviewer answer, so multiple reviewers can contribute to one case. Malformed artifacts, unknown case/candidate IDs and duplicate reviewer/case answers are rejected. Keep this unblinded report out of view until the review is finished.
 
-The manual CLI's `edit` and `render` commands can make those exports for you. Use at least 10 photos across different subjects and light. With about 200 tier 1 items, a 90% score has a margin of roughly ±4 points.
+## Interruptions and interpretation
 
-Fixture photos and results stay out of Git (`fixtures/*/` and `results/` are ignored).
+Any failure after native work begins stops the serial batch and preserves `session.lock`, saved bridge operations, current case status and remaining pending cases. No mutation, model call, or uncertain export is automatically retried. Inspect the native receipts, Lightroom state and the evaluation's separate SQLite journal before recovery. A dead PID alone does not establish that pending Lightroom work finished. The harness has no automatic resume command, and removing its lock without resolving native work is unsafe.
+
+A review may include completed cases from a partial batch, but its excluded count and private manifest preserve incompleteness. A case that hit the decision cap without a final model assessment is also incomplete. Do not count incomplete cases as aesthetic losses or silently discard them from reliability reporting.
+
+For each milestone, retain the same corpus fingerprint, brief, model, edit budget and comparator when making comparisons. Record completed/attempted cases, failure reason, elapsed time, actual preferences, visible defects and unnecessary edits. A new corpus fingerprint, different sidecar starting state, model, or editing budget changes the experiment. A small set of similar photographs is useful for regressions but cannot establish general photographic quality.
+
+Harness tests use mock Lightroom/model responses to check hashing, source preservation, native path contracts, ownership, serialization, incomplete cases, blinding and immutable answers. Native bridge validation and human aesthetic evaluation remain separate evidence.

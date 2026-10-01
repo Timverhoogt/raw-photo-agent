@@ -105,27 +105,31 @@ export class PhotoController {
     const candidate = await this.checkpoint(runId, description, parentId, direction ?? parent.direction ?? 'natural');
     return this.render(runId, candidate.id);
   }
-  async render(runId: string, candidateId: string, maxEdge = 2048) {
+  async render(runId: string, candidateId: string, maxEdge = 2048, format: 'JPEG' | 'TIFF' = 'JPEG') {
     const run = this.run(runId);
     const candidate = this.candidate(runId, candidateId);
     if (!Number.isInteger(maxEdge) || maxEdge < 256 || maxEdge > 8192) throw new Error('maxEdge must be an integer from 256 to 8192.');
-    const outputPath = join(this.exportRoot, `${candidate.id}-${randomUUID()}.jpg`);
+    if (format !== 'JPEG' && format !== 'TIFF') throw new Error('Render format must be JPEG or TIFF.');
+    const outputPath = join(this.exportRoot, `${candidate.id}-${randomUUID()}.${format === 'TIFF' ? 'tif' : 'jpg'}`);
     const result = await this.logged<{ outputPath: string; photoId: string; stateToken: string }>(runId, 'render', {
-      photoId: run.workingPhotoId, expectedStateToken: candidate.stateToken, outputPath, maxEdge,
+      photoId: run.workingPhotoId, expectedStateToken: candidate.stateToken, outputPath, maxEdge, format,
     });
     if (result.outputPath !== outputPath || result.stateToken !== candidate.stateToken || !existsSync(outputPath) || statSync(outputPath).size === 0) {
       this.store.setRunStatus(runId, 'interrupted');
       throw new Error('The rendered image could not be verified for this candidate.');
     }
     // Keep the primary evidence immutable. Additional exports remain in the event journal.
-    if (!candidate.previewPath) this.store.setCandidatePreview(candidateId, outputPath);
+    if (!candidate.previewPath && format === 'JPEG') this.store.setCandidatePreview(candidateId, outputPath);
     return { ...this.candidate(runId, candidateId), previewPath: outputPath };
   }
-  async restore(runId: string, candidateId: string, allowPaused = false) {
+  async restore(runId: string, candidateId: string, allowPaused = false, expectedCurrentToken?: string) {
     const run = this.run(runId);
     if (!allowPaused) this.requireActive(run);
     const candidate = this.candidate(runId, candidateId);
     const before = await this.state(run.workingPhotoId);
+    if (expectedCurrentToken !== undefined && before.stateToken !== expectedCurrentToken) {
+      throw new Error('The photo changed since the reviewed checkpoint. Preserve the manual edit and reconcile it before restoring.');
+    }
     const result = await this.logged<{ state: PhotoState }>(runId, 'restore', {
       photoId: run.workingPhotoId, expectedStateToken: before.stateToken, snapshotId: candidate.snapshotId,
     });

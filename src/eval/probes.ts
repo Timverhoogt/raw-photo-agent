@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { requiresDetailEvidence } from '../agent/core.ts';
 import type { Decision, DecisionInput } from '../agent/core.ts';
 import type { Fault, Fixture } from './fixtures.ts';
 
@@ -25,6 +26,10 @@ function opaqueId(...parts: string[]) {
 }
 
 export function buildCase(probe: ProbeName, fixture: Fixture, fault: Fault | null, repeat: number): ProbeCase {
+  if (probe === 'fix-fault' && fault && fault.fix.every(({ key }) => requiresDetailEvidence({ [key]: 0 }))) {
+    throw new Error(`Fixture ${fixture.id}, fault ${fault.id}: fix-fault requires matching detail crops for every accepted fix. ` +
+      'This single-decision harness has no crop/inspection support. Omit fix-fault from --probes or supply a valid global alternative fix.');
+  }
   const settings = fixture.displayedSettings;
   const referenceId = opaqueId(fixture.id, fault?.id ?? '', probe, 'reference');
   const faultId = fault ? opaqueId(fixture.id, fault.id, probe, 'fault') : null;

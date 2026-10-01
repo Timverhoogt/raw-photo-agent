@@ -53,7 +53,7 @@ export class OpenAICompatibleTransport implements ModelTransport {
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.retries = options.retries ?? 2;
     this.fetch = options.fetch ?? fetch;
-    this.capabilities = { maxImages: 3, dataLeavesDevice: !isLoopbackUrl(this.baseUrl) };
+    this.capabilities = { maxImages: 9, dataLeavesDevice: !isLoopbackUrl(this.baseUrl) };
   }
 
   private headers(): Record<string, string> {
@@ -78,7 +78,7 @@ export class OpenAICompatibleTransport implements ModelTransport {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const images = await Promise.all(request.images.map(path => encodePreview(path, this.maxImageEdge)));
+    const images = await Promise.all(request.images.map(path => encodePreview(path, request.detailImagePaths?.includes(path) ? Infinity : this.maxImageEdge)));
     const prompt = this.mode === 'json_schema' ? request.prompt
       : `${request.prompt}\nRespond with only one JSON object that matches this JSON Schema:\n${JSON.stringify(request.schema)}\n`;
     const body = {

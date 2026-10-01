@@ -31,7 +31,11 @@ Choose one **RAW/DNG file up to 200 MiB** to upload, or choose **the currently s
 
 An upload is copied into `.runtime/uploads/<UUID>/<filename>`. The plugin adds that path to the catalog or reuses its existing original, selects it, and opens Develop. It then creates a virtual copy, saves a native baseline snapshot, and exports the first preview. The source photo's existing development settings are preserved, and uploading does not change the user's original file. Lightroom continues to reference the uploaded file, so keep it available after import; deleting the uploads directory would leave those catalog entries without their RAW source.
 
-Each decision receives the current JPEG and up to two comparison JPEGs, supported numeric settings, the editing intention, prior public observations, and your feedback. The model can propose a small global edit, restore a pictured checkpoint, ask a creative question, or finish. The controller validates the response, applies permitted values, checkpoints, and renders again. Previews never become the source of later edits: Lightroom develops the RAW with its current settings.
+Each decision receives the current overview JPEG and up to two comparison overviews, supported numeric settings, the editing intention, prior public observations, and your feedback. The model can propose a small global edit, request detail inspection, restore a pictured checkpoint, ask a creative question, or finish. The controller validates the response, applies permitted values, checkpoints, and renders again. Previews never become the source of later edits: Lightroom develops the RAW with its current settings.
+
+Each checkpoint also saves a separate Lightroom JPEG export, up to 8192 pixels on its long edge, while that state is current. When the agent requests inspection, it chooses one or two visible region centers. The same regions are extracted from the saved exports for every candidate and retained for subsequent edits. A decision receives at most nine images: three overviews and two detail crops per candidate. Texture, sharpening, and noise-reduction changes require matching current/reference detail evidence. Detail crops are at most 896 × 896 export pixels, with JPEG compression and no resizing; large RAWs can exceed the export limit, so these are not an unconditional sensor-level 100% view.
+
+Use **Detail** beside **Overview** to compare the same region before and after. Select a region, use **Export pixels** to view it without fitting, and pan either pane to move both. Filmstrip selection changes the edited version under comparison. Older saved sessions without detail exports continue to show their overview. Saving larger exports adds render time and local storage per checkpoint.
 
 The default limit is **six edits**, with at most twelve model decisions and two creative questions. A round changes at most three supported global parameters. The agent can finish earlier when it does not see a useful next edit.
 
@@ -43,6 +47,8 @@ Progress arrives through server-sent events. The public notes describe observati
 
 - **Pause** cancels an active model inspection or waits for the current native work to reach a checkpoint. It does not undo an edit or cancel an already-started Lightroom operation. Initialization first completes the baseline. **Resume** continues the same in-memory session.
 - **Finish** stops further editing at the next checkpoint and presents the retained versions. It keeps the latest completed work available for comparison.
+- **Review elapsed time** shows how long the current model inspection has been pending. It is elapsed time, not a completion estimate.
+- **Retry review** appears for a failed model inspection only. It reuses the same saved checkpoint and images, retains session ownership, and does not repeat a Lightroom operation. You can also finish at that checkpoint. Retry is available only while the same server remains running; a restarted server requires manual reconciliation.
 - **Creative questions** offer two or three options. An answer is tied to the current question and informs the next decision; silence is not a selection.
 - **Final comparison** presents two or three retained versions when available. Choose one to make it active in Lightroom and export it. If no edit was retained, the baseline is exported directly.
 
@@ -56,13 +62,13 @@ RPA_MODEL=gpt-6-astra RPA_MAX_EDITS=4 npm run demo
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RPA_PROVIDER` | `codex-cli` | `codex-cli`, `anthropic` or `openai-compatible`; see [model evaluation](evaluation.md#providers) for provider settings. |
+| `RPA_PROVIDER` | `codex-cli` | `codex-cli`, `anthropic` or `openai-compatible`; see [model evaluation](model-evaluation.md#providers) for provider settings. |
 | `RPA_MODEL` | `gpt-6-astra` | Model requested from the provider; it must support image input and be available to the account. Anthropic defaults to `claude-opus-5-5`. |
 | `RPA_MAX_EDITS` | `6` | Global editing budget, integer 1–10. |
 | `RPA_PORT` | `4318` | Local HTTP port; the server binds to `127.0.0.1`. |
 | `RPA_CODEX_BIN` | `codex` | Executable path/name when the CLI is not on the server's `PATH`. |
 
-With the default provider, model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The other providers send the previews and the brief in one API request with no tools. If a decision fails validation, the agent asks the model once more with the validator's error (`RPA_REPAIR_ATTEMPTS`); this never touches Lightroom. Only Codex has been checked in a live Lightroom session. Run the [model evaluation](evaluation.md) before relying on another provider. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
+With the default provider, model calls use a read-only Codex invocation with executable, browser, computer-use, connector, and plugin tools disabled. The other providers send the previews and the brief in one API request with no tools. If a decision fails validation, the agent asks the model once more with the validator's error (`RPA_REPAIR_ATTEMPTS`); this never touches Lightroom. Only Codex has been checked in a live Lightroom session. Run the [model evaluation](model-evaluation.md) before relying on another provider. The model returns a validated decision; the TypeScript controller performs Lightroom operations. Account usage and model availability still apply. This local setup does not require an additional model API key.
 
 ## Local data and model requests
 
@@ -94,7 +100,7 @@ Restoration first checks recorded settings, then compares a fresh 2048-pixel pre
 
 ## Current limits
 
-The autonomous demo uses **global numeric adjustments only**. It does not crop, straighten, create or adjust masks, heal/remove objects, apply AI Denoise, or invoke independent judges. The manual CLI retains its guarded existing-mask exposure/texture controls and can capture manual native edits. An MCP wrapper, automatic local editing, detail-aware review, and independent critique loops remain future work.
+The served autonomous demo uses **global numeric adjustments only**. It does not crop, straighten, create or adjust masks, heal/remove objects, apply AI Denoise, or invoke independent judges. An internal existing-mask loop is implemented for controlled validation: it requires an explicit verified-capability option and exact mask ID, fresh native slider ranges, matching detail evidence, and a repeated target/state check before mutation. The server does not enable that option. Native subject/background creation is available for diagnostics, while general pixel recovery remains unresolved. The manual CLI retains guarded existing-mask exposure/texture controls and can capture manual native edits. See [restoration validation](restoration-validation.md) before expanding autonomous scope.
 
 The browser reports real candidates and operations, but photographic quality still needs human evaluation. No award-winning outcome is promised. Keep [native validation](../LIVE_VALIDATION.md), [mocked tests](../plugin/RawPhotoAgent.lrplugin/tests/README.md), and aesthetic evaluation separate.
 

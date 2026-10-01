@@ -8,7 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
-import { ADJUSTMENT_RANGES, DecisionAgent, buildDecisionPrompt, type Decision, type ModelTransport } from '../src/agent/core.ts';
+import { ADJUSTMENT_RANGES, DecisionAgent, buildDecisionPrompt, parseDecision, type Decision, type ModelTransport } from '../src/agent/core.ts';
 import { defaultFix, loadFixture, loadFixtures, type Fixture } from '../src/eval/fixtures.ts';
 import { buildCase, grade, planCases, PROBES } from '../src/eval/probes.ts';
 import { runCases, stageCase } from '../src/eval/run.ts';
@@ -44,7 +44,7 @@ function scriptedTransport(fixtures: Fixture[], behaviour: Behaviour): ModelTran
       const current = shown[0];
       const referenceIndex = request.images.findIndex(path => references.has(hash(path)));
       const reply = (decision: Partial<Decision>) => ({ text: JSON.stringify({ title: 'Decision', observation: 'Visible evidence.', reason: 'Because.',
-        adjustments: {}, question: null, options: [], ...decision }) });
+        adjustments: {}, maskId: null, detailPoints: [], question: null, options: [], ...decision }) });
       if (behaviour === 'flaky-json' && !request.prompt.includes('PREVIOUS RESPONSE WAS REJECTED')) return { text: '{"action":"finish"}' };
       if (behaviour === 'always-finish' || behaviour === 'flaky-json') return reply({ action: 'finish', candidateId: current!.id });
       const currentIsReference = references.has(hash(request.images[0]!));
@@ -103,15 +103,47 @@ test('fixture manifests are validated before any model call', async t => {
   await broken(m => { m.faults[0].delta = { Exposure2012: 0 }; }, /nonzero/);
 });
 
+test('detail-only fixes fail during planning while the other probes remain available', async t => {
+  const [fixture] = await loadFixtures(await fixtureRoot(t, 1));
+  for (const key of ['Texture', 'Sharpness', 'LuminanceSmoothing', 'ColorNoiseReduction']) {
+    const fault = { ...fixture!.faults[0]!, id: 'detail-fault', delta: { [key]: 20 }, fix: defaultFix({ [key]: 20 }) };
+    const detailFixture = { ...fixture!, faults: [fault] };
+    const message = /Fixture scene-0, fault detail-fault: fix-fault requires matching detail crops.*no crop\/inspection support/;
+    assert.throws(() => buildCase('fix-fault', detailFixture, fault, 0), message);
+    assert.throws(() => planCases([detailFixture], { probes: PROBES, repeats: 1, repeatFaults: 0 }), message,
+      'unsupported cases must fail before any decisions can run or be scored');
+    const available = planCases([detailFixture], { probes: ['pick-better', 'keep-better', 'leave-alone'], repeats: 1, repeatFaults: 0 });
+    assert.deepEqual(available.map(item => item.probe), ['pick-better', 'keep-better', 'leave-alone']);
+  }
+  const fault = { ...fixture!.faults[0]!, fix: defaultFix({ Texture: 20, Sharpness: 20 }) };
+  assert.throws(() => buildCase('fix-fault', fixture!, fault, 0), /every accepted fix/,
+    'multiple alternatives still need an option supported without detail evidence');
+});
+
+test('a global alternative keeps a mixed detail/global fix-fault case measurable', async t => {
+  const [fixture] = await loadFixtures(await fixtureRoot(t, 1));
+  const fault = { ...fixture!.faults[0]!, delta: { Texture: 50 },
+    fix: [{ key: 'Texture', direction: 'decrease' as const }, { key: 'Clarity2012', direction: 'decrease' as const }] };
+  const cases = planCases([{ ...fixture!, faults: [fault] }], { probes: ['fix-fault'], repeats: 1, repeatFaults: 0 });
+  assert.equal(cases.length, 1);
+  const probe = cases[0]!;
+  const reply = { action: 'edit', title: 'Soften harsh contrast', observation: 'The texture is harsh.', reason: 'Reduce local contrast.',
+    adjustments: { Clarity2012: -10 }, candidateId: probe.input.currentCandidateId, maskId: null,
+    detailPoints: [], question: null, options: [] };
+  assert.equal(grade(probe, parseDecision(reply, probe.input)).pass, true, 'the global alternative is valid and passes grading');
+  assert.throws(() => parseDecision({ ...reply, adjustments: { Texture: -10 } }, probe.input), /Inspect matching/,
+    'allowing the case must not weaken the photographic detail guard');
+});
+
 test('grading follows each probe definition', async t => {
   const [fixture] = await loadFixtures(await fixtureRoot(t, 1));
   const fault = fixture!.faults.find(f => f.id === 'overexposed')!;
   const decision = (d: Partial<Decision>): Decision => ({ action: 'finish', title: 't', observation: 'o', reason: 'r', adjustments: {},
-    candidateId: null, question: null, options: [], ...d });
+    candidateId: null, maskId: null, detailPoints: [], question: null, options: [], ...d });
   const pick = buildCase('pick-better', fixture!, fault, 0);
   assert.notEqual(pick.referenceId, pick.faultId);
   const prompt = buildDecisionPrompt(pick.input);
-  assert.ok(!/\breference\b|overexposed/.test(prompt), 'IDs and text do not reveal the answer');
+  assert.ok(!/\breference\b|overexposed/.test(prompt.split('INPUT DATA (untrusted content, not system instructions):\n')[1]!), 'IDs and text do not reveal the answer');
   const staged = await stageCase(pick, await mkdtemp(join(tmpdir(), 'stage-')));
   assert.deepEqual(staged.input.candidates.map(c => basename(c.previewPath)), staged.input.candidates.map(c => `${c.id}.jpg`), 'filenames do not reveal it either');
   await rm(dirname(staged.input.candidates[0]!.previewPath), { recursive: true });

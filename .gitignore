@@ -8,6 +8,8 @@ fixtures/*/
 .env.*
 !.env.example
 !.env.sample
+/RAW/
+/raw/
 *.sqlite
 *.sqlite-*
 *.lrcat*
