@@ -32,21 +32,31 @@ export async function readDetailSource(path: string, stateToken: string): Promis
 /** Extract export pixels directly: never resize the overview, upscale, or infer sensor resolution. */
 export async function cropDetails(source: DetailSource, points: DetailPoint[], directory: string): Promise<DetailImage[]> {
   if (!validDetailPoints(points)) throw new Error('Choose one or two valid detail points.');
-  const { default: sharp } = await import('sharp');
-  const actual = await readDetailSource(source.path, source.stateToken);
-  if (actual.width !== source.width || actual.height !== source.height) throw new Error('The saved detail export changed dimensions.');
+  await verifyDetailSource(source);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const edge = Math.min(DETAIL_EDGE, source.width, source.height);
   const details: DetailImage[] = [];
   for (const point of points) {
     const left = Math.max(0, Math.min(source.width - edge, Math.round(point.x * (source.width - 1) - (edge - 1) / 2)));
     const top = Math.max(0, Math.min(source.height - edge, Math.round(point.y * (source.height - 1) - (edge - 1) / 2)));
-    // Include all crop identity in the filename so old browser evidence cannot become another region.
-    const key = createHash('sha256').update(JSON.stringify([source.path, source.stateToken, point])).digest('hex').slice(0, 20);
-    const path = join(directory, `${point.id}-${key}.jpg`);
-    await sharp(source.path).extract({ left, top, width: edge, height: edge }).jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toFile(path);
-    await chmod(path, 0o600);
-    details.push({ ...point, path, width: edge, height: edge, sourceWidth: source.width, sourceHeight: source.height });
+    details.push(await extractDetail(source, point, { left, top, width: edge, height: edge }, directory));
   }
   return details;
+}
+
+export async function verifyDetailSource(source: DetailSource) {
+  const actual = await readDetailSource(source.path, source.stateToken);
+  if (actual.width !== source.width || actual.height !== source.height) throw new Error('The saved detail export changed dimensions.');
+}
+
+/** Save one window of export pixels. The caller has verified the source and created the directory. */
+export async function extractDetail(source: DetailSource, point: DetailPoint, window: { left: number; top: number; width: number; height: number },
+  directory: string, identity: unknown = point): Promise<DetailImage> {
+  const { default: sharp } = await import('sharp');
+  // Include all crop identity in the filename so old browser evidence cannot become another region.
+  const key = createHash('sha256').update(JSON.stringify([source.path, source.stateToken, identity])).digest('hex').slice(0, 20);
+  const path = join(directory, `${point.id}-${key}.jpg`);
+  await sharp(source.path).extract(window).jpeg({ quality: 95, chromaSubsampling: '4:4:4' }).toFile(path);
+  await chmod(path, 0o600);
+  return { ...point, path, width: window.width, height: window.height, sourceWidth: source.width, sourceHeight: source.height };
 }
