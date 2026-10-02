@@ -7,6 +7,7 @@ import { PhotoController } from './controller.ts';
 import { getPaths, preparePlugin } from './config.ts';
 import { compareImages, detailCrop, verifyRestoredRendering } from './images.ts';
 import { verifyMaskRoundtrip } from './mask-validation.ts';
+import { mapRunDetails, parseDetailPoints } from './detail-map.ts';
 
 const help = `Raw Photo Agent — local Lightroom Classic controller
 
@@ -33,13 +34,15 @@ node src/cli.ts verify-roundtrip --run ID --candidate ID
 node src/cli.ts verify-mask-roundtrip --run ID --candidate ID --mask MASK_ID [--format JPEG|TIFF]
 node src/cli.ts image-diff --before PATH --after PATH
 node src/cli.ts crop --input PATH --output PATH --region '{"left":0,"top":0,"width":512,"height":512}'
+node src/cli.ts detail-map --run ID --candidates ID,ID[,ID] --anchor ID --points '[{"id":"eye","label":"Eye","x":0.5,"y":0.4}]' --output DIR
+                                              Crop the same scene region from differently cropped candidates' recorded exports
 
 Commands emit JSON. No model API key is needed: the current agent drives this controller.
 Start requires the filename explicitly chosen by the user; it creates a virtual copy.
 All edits and restoration are restricted by the plugin to selected virtual copies.
 `;
 
-const valueOptions = ['photo','filename','intent','run','parent','mask','set','reason','candidate','size','format','candidates','question','choice','feedback','before','after','input','output','region','direction'] as const;
+const valueOptions = ['photo','filename','intent','run','parent','mask','set','reason','candidate','size','format','candidates','question','choice','feedback','before','after','input','output','region','direction','anchor','points'] as const;
 const { values, positionals } = parseArgs({ options: Object.fromEntries(valueOptions.map(name => [name, { type: 'string' as const }])), allowPositionals: true });
 const command = positionals[0] ?? 'help';
 const required = (name: string) => {
@@ -73,7 +76,7 @@ async function main() {
   const store = new RunStore(paths.database);
   const controller = new PhotoController(bridge, store, paths.exportRoot);
   // Hold one lock across the entire command, including multiple SDK calls.
-  const changesSession = !['status','capabilities','selected','state','selected-mask','history'].includes(command);
+  const changesSession = !['status','capabilities','selected','state','selected-mask','history','detail-map'].includes(command);
   const lockPath = join(paths.runtime, 'session.lock');
   let lock: number | undefined;
   let preserveLock = false;
@@ -107,6 +110,8 @@ async function main() {
       }
       case 'restore': output(await controller.restore(required('run'), required('candidate'))); break;
       case 'render': output(await controller.render(required('run'), required('candidate'), Number(values.size ?? '2048'), (values.format ?? 'JPEG') as 'JPEG' | 'TIFF')); break;
+      case 'detail-map': output(await mapRunDetails(store, required('run'), required('candidates').split(','), required('anchor'),
+        parseDetailPoints(required('points').startsWith('@') ? readFileSync(required('points').slice(1), 'utf8') : required('points')), required('output'))); break;
       case 'compare': output(controller.compare(required('run'), required('candidates').split(','), required('question'))); break;
       case 'choose': output(await controller.choose(required('choice'), required('candidate'), values.feedback as string | undefined)); break;
       case 'reconcile': output(await controller.reconcile(required('run'), required('candidate'))); break;

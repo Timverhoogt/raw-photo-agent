@@ -190,6 +190,22 @@ node src/cli.ts crop \
 
 Check the actual exported dimensions. A 100% crop of a reduced preview is not a 100% view of the source photo; the current render limit is 8,192 pixels on the long edge. For larger originals, use Lightroom's native 100% view. Evaluate noise, subject texture, highlights, and mask boundaries at an appropriate resolution, then reassess the whole image at its intended viewing size.
 
+### Matching details across different crops
+
+When candidates use different crops, the same normalized coordinates point at different scene content. `detail-map` crops the same scene region from each candidate's recorded export:
+
+```sh
+node src/cli.ts render --run 'RUN_ID' --candidate 'WIDE_ID' --size 8192
+node src/cli.ts render --run 'RUN_ID' --candidate 'CROPPED_ID' --size 8192
+node src/cli.ts detail-map --run 'RUN_ID' --candidates 'WIDE_ID,CROPPED_ID' --anchor 'CROPPED_ID' \
+  --points '[{"id":"eye","label":"Eye","x":0.42,"y":0.38}]' \
+  --output '/absolute/path/fresh-detail-map'
+```
+
+Points are normalized to the anchor candidate's overview. The command does not contact Lightroom: it reads each candidate's crop from its recorded settings and uses the largest JPEG export that the journal records for that exact state. Export dimensions must agree with each crop; straightened crops are refused. A region outside any candidate's crop is reported as unavailable. Lower-resolution exports receive a smaller window of the same region instead of being enlarged. Each region also gets a `*-comparison.jpg` side-by-side sheet, in which smaller crops are enlarged for viewing only.
+
+This mapping is validated with synthetic exports, not yet with Lightroom. Check by eye that the crops show the same content. Use a portrait-orientation RAW as well as a landscape one: dimension checks cannot detect every crop-coordinate mismatch.
+
 ## Resume after interruption
 
 The bridge does not automatically retry an uncertain request. A timeout may mean Lightroom is still processing it. The bounded additional export in `verify-roundtrip` occurs only after a successful export whose pixels differ; it is not a retry of a timeout or mutation. Inspect Lightroom and the journal before sending further mutations:
