@@ -83,7 +83,7 @@ The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVI
 
 ## Current status
 
-**Experimental.** Live trials have exercised RAW import, virtual copies, global edits, previews, comparisons, and JPEG export. Lightroom Classic 15.5.1 and Codex CLI 0.153.4 have been checked locally.
+**Experimental.** Live trials have exercised RAW import, virtual copies, global edits, previews, comparisons, and JPEG export on Lightroom Classic 15.5.1, with Codex CLI 0.153.4 checked locally. New import and render diagnostics use Lightroom Classic 15.6 / Camera Raw 18.7; their results are recorded separately.
 
 | Available in the browser | Outside the autonomous demo |
 | --- | --- |
@@ -91,22 +91,24 @@ The demo uses GPT-6 Astra through the signed-in Codex CLI by default. `RPA_PROVI
 | Progress notes, elapsed review time, safe review retry, pause/finish, creative questions, and final selection | Independent judging agents and batch editing |
 | Agent-requested detail inspection and synchronized before/after regions | Automatic crop mapping across different compositions |
 
-The manual workflow can capture crops and adjust an existing mask. Native subject/background mask creation and a guarded existing-mask agent loop are implemented for controlled validation; **autonomous demo masking stays disabled**. Native settings restored exactly in the recorded trials, but **exact pixel recovery remains unverified**. See the [restoration experiments](docs/restoration-validation.md), [render repeatability controls](docs/render-repeatability.md), [live validation record](LIVE_VALIDATION.md), and [roadmap](ROADMAP.md).
+The manual workflow can capture crops and adjust an existing mask. Native subject/background mask creation and a guarded existing-mask agent loop are implemented for controlled validation; **autonomous demo masking stays disabled**. Native settings restored exactly in the recorded trials, but **exact pixel recovery remains unverified**. See the [restoration experiments](docs/restoration-validation.md), [render repeatability controls](docs/render-repeatability.md), [import and render diagnosis](docs/import-render-diagnosis.md), [live validation record](LIVE_VALIDATION.md), and [roadmap](ROADMAP.md).
 
 The local [RAW quality evaluation](docs/evaluation.md) indexes RAW/XMP hashes, runs separate working copies, produces blinded comparison pages, and records explicit photographer preferences. Completed exports establish integration behavior; they do not establish a quality win without actual photographer votes.
 
-### Progress — 1 October 2026
+### Progress — 3 October 2026
 
 | Roadmap work | Verified progress |
 | --- | --- |
 | Provider support and detail inspection | Integrated provider selection, matched detail crops, and evidence-capacity checks. [Model evaluation](docs/model-evaluation.md) and [RAW quality evaluation](docs/evaluation.md) have separate workflows. |
 | Lightroom recovery guards | Added bounded copy-selection waits, strict import-state checks, and one to three measured edit/restore cycles with explicit mask selection before each cycle. |
-| Native restoration trials | Completed subject and background trials: **60 TIFFs, 206 pixel comparisons, and eight exact native-settings restorations**. Original and staged RAW/XMP hashes remained unchanged. |
-| Automated validation | **196 Node tests and 199 Lua 5.1 checks passed**, alongside TypeScript and Codex CLI compatibility checks. CI covers Node.js 24 and 26. |
+| Native restoration trials | The 1 October subject and background trials completed **60 TIFFs, 206 pixel comparisons, and eight exact native-settings restorations**. Original and staged RAW/XMP hashes remained unchanged. |
+| Import-state diagnosis | Three instrumented fresh imports captured previously absent temperature/tint fields becoming 5150 K / +20 at different guards depending on the starting module. The RAW-only control also changed, so an XMP sidecar was not required. All remain `STALE_STATE` failures; no normalization was allowed. |
+| Render diagnosis | A separate 15-TIFF experiment compared color noise reduction at 25, at 0, and after restoring 25. All ten within-block pairs in each condition remained nonexact. [Evidence and limits](docs/import-render-diagnosis.md). |
+| Automated validation | **206 Node tests and 245 Lua 5.1 checks passed**, alongside TypeScript. CI covers Node.js 24 and 26; the standalone Codex CLI compatibility check also passed. |
 
 All 206 pixel comparisons were nonexact, including unchanged-render controls; every edit/restore cycle therefore remains unverified for pixel recovery. The [trial results and limits](docs/restoration-validation.md#three-cycle-live-trials--1-october-2026) retain the evidence for each scene. These trials do not establish a photographic quality improvement.
 
-Next on the [roadmap](ROADMAP.md): diagnose the earlier import-state drift, test deliberately retained native edit residuals, broaden scene and mask-boundary checks, and collect blinded photographer votes. Autonomous local editing remains gated on recovery evidence; composition assistance, independent critique, and batch editing remain later milestones.
+The bounded diagnosis is complete. Next on the [roadmap](ROADMAP.md): establish an explicit import-readiness contract, narrow remaining render hypotheses with independent controls, test deliberately retained native edit residuals, broaden scene and mask-boundary checks, and collect blinded photographer votes. The new traces identify changes in the October trials; they do not retrospectively explain the September failures. Autonomous local editing remains gated on recovery evidence; composition assistance, independent critique, and batch editing remain later milestones.
 
 ## Documentation & development
 
@@ -118,6 +120,7 @@ Next on the [roadmap](ROADMAP.md): diagnose the earlier import-state drift, test
 | [Roadmap](ROADMAP.md) | Next milestone, later capabilities, and quality acceptance gates |
 | [RAW quality evaluation](docs/evaluation.md) | Repeatable RAW/XMP trials, blinded comparisons, and photographer votes |
 | [Model evaluation](docs/model-evaluation.md) | Provider configuration, decision probes, and measured thresholds |
+| [Import and render diagnosis](docs/import-render-diagnosis.md) | First-divergence traces, controlled render experiments, and unresolved recovery limits |
 | [Architecture](DESIGN.md) | Controller, Lightroom bridge, and planned interfaces |
 | [Native plug-in](plugin/README.md) | Protocol and supported Lightroom operations |
 | [Contributing](CONTRIBUTING.md) | Development and meaningful bug reports |

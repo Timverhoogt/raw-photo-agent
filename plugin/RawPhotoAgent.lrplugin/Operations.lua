@@ -98,6 +98,83 @@ return function(U, config)
         return current
     end
 
+    -- Preserve raw SDK values (including absent versus empty fields) before
+    -- another SDK call can reuse or mutate the table returned by Lightroom.
+    local function freeze(value)
+        if type(value) ~= 'table' then return value end
+        local copy = {}
+        for key, item in pairs(value) do copy[key] = freeze(item) end
+        return setmetatable(copy, getmetatable(value))
+    end
+
+    local function settingsChanges(before, after)
+        local changes = U.array()
+        local function visit(left, right, path)
+            if U.encode(left) == U.encode(right) then return end
+            if type(left) == 'table' and type(right) == 'table'
+                and U.encode(left):sub(1, 1) == U.encode(right):sub(1, 1) then
+                local keys, seen = {}, {}
+                for key in pairs(left) do keys[#keys + 1], seen[key] = key, true end
+                for key in pairs(right) do if not seen[key] then keys[#keys + 1] = key end end
+                table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+                for _, key in ipairs(keys) do
+                    -- JSON Pointer uses zero-based array indices and escaped
+                    -- object keys. Presence flags disambiguate omitted values.
+                    local segment = type(key) == 'number' and tostring(key - 1)
+                        or key:gsub('~', '~0'):gsub('/', '~1')
+                    visit(left[key], right[key], path .. '/' .. segment)
+                end
+            else
+                changes[#changes + 1] = { path = path, beforePresent = left ~= nil,
+                    afterPresent = right ~= nil, before = freeze(left), after = freeze(right) }
+            end
+        end
+        visit(before, after, '')
+        return changes
+    end
+
+    local function importDiagnostics(catalog, photo, request)
+        -- Bridge validates UUID request IDs before dispatch. Keep that path
+        -- invariant here too, since this helper creates immutable evidence.
+        if type(request.id) ~= 'string' or #request.id ~= 36 or not request.id:match('^[%x%-]+$') then
+            U.fail('INVALID_REQUEST', 'Import diagnostics require the validated request UUID.')
+        end
+        local directory = LrPathUtils.child(LrPathUtils.child(LrPathUtils.child(config.bridgeDir, 'diagnostics'), 'import-photo'), request.id)
+        U.directory(directory)
+        local trace = { sequence = 0 }
+        local baseline, previous
+        function trace.read(phase, guardToken)
+            if trace.sequence >= 64 then U.fail('DIAGNOSTIC_LIMIT', 'Import diagnostic readback limit reached; no action was retried.') end
+            local current = freeze(state(catalog, photo))
+            local capturedAt = U.now()
+            trace.sequence = trace.sequence + 1
+            if not baseline then baseline = current; trace.baselineToken = current.stateToken
+            else guardToken = guardToken or baseline.stateToken end
+            local selectedIds = U.array()
+            for _, selectedPhoto in ipairs(selection(catalog)) do selectedIds[#selectedIds + 1] = photoId(catalog, selectedPhoto) end
+            U.writeJson(LrPathUtils.child(directory, string.format('%04d.json', trace.sequence)), {
+                version = 1, operation = 'import_photo', requestId = request.id,
+                requestIssuedAt = request.issuedAt, requestDeadlineAt = request.deadlineAt,
+                sequence = trace.sequence, phase = phase, capturedAt = capturedAt,
+                photo = describe(catalog, photo), photoId = current.photoId,
+                module = LrApplicationView.getCurrentModuleName(), selectedPhotoIds = selectedIds,
+                state = current, baselineStateToken = baseline.stateToken, guardStateToken = guardToken,
+                previousSequence = previous and trace.sequence - 1 or nil,
+                changesFromPrevious = previous and settingsChanges(previous.settings, current.settings) or U.array(),
+                changesFromBaseline = settingsChanges(baseline.settings, current.settings),
+                interpretation = 'Native readback evidence only; no normalization, settling, retry, or acceptance tolerance.',
+            })
+            previous = current
+            -- Persist the mismatching readback before retaining the original
+            -- strict failure. Diagnostic writes never authorize a new baseline.
+            if guardToken and current.stateToken ~= guardToken then
+                U.fail('STALE_STATE', 'Develop settings changed; read_state and review before submitting another edit.')
+            end
+            return current
+        end
+        return trace
+    end
+
     local function correction(settings, id)
         for _, value in ipairs(settings.MaskGroupBasedCorrections or {}) do
             if value.CorrectionID == id then return value end
@@ -281,22 +358,26 @@ return function(U, config)
         end
     end
 
-    local function developSelected(catalog, photo, request)
+    local function developSelected(catalog, photo, request, trace)
         local id = photoId(catalog, photo)
         target(id, false, false)
-        local before = state(catalog, photo)
+        local before = trace and trace.read('before-develop', trace.baselineToken) or state(catalog, photo)
         U.checkDeadline(request)
         if LrApplicationView.getCurrentModuleName() ~= 'develop' then
             request._mutationStarted = true -- UI action; its outcome is uncertain on timeout.
             LrApplicationView.switchToModule('develop')
         end
+        if trace then trace.read('after-develop-request') end
         local untilTime = math.min(request.deadlineAt, U.now() + 5000)
         repeat
             U.checkDeadline(request)
             target(id, false, false)
-            expected(catalog, photo, before.stateToken)
+            if trace then trace.read('develop-completion-guard', before.stateToken)
+            else expected(catalog, photo, before.stateToken) end
             if LrApplicationView.getCurrentModuleName() == 'develop' then
                 U.checkDeadline(request)
+                if trace then trace.read('completion-guard', trace.baselineToken); U.checkDeadline(request) end
+                target(id, false, true)
                 return describe(catalog, photo)
             end
             if U.now() >= untilTime then break end
@@ -318,6 +399,10 @@ return function(U, config)
                 auto_tone = type(LrDevelopController.setAutoTone) == 'function',
                 import_photo = true, reveal_photo = true },
             importExtensions = importExtensions, importPathLayout = 'importRoot/UUID/safe-filename.ext',
+            importDiagnostics = { enabled = true, immutable = true, maxReadbacks = 64,
+                directory = LrPathUtils.child(LrPathUtils.child(config.bridgeDir, 'diagnostics'), 'import-photo'),
+                settings = 'full native getDevelopSettings', changes = 'JSON Pointer with explicit presence flags',
+                timingImpact = 'Synchronous evidence writes may affect observation timing; preserve the installed plug-in hash.' },
             numericAdjustments = numericRanges, stringAdjustments = { WhiteBalance = U.array({ 'Custom' }) },
             localAdjustments = { local_Exposure = 'dynamic: selected_mask.parameters.local_Exposure',
                 local_Texture = 'dynamic: selected_mask.parameters.local_Texture' },
@@ -379,11 +464,13 @@ return function(U, config)
         rawOnly(photo)
         available(photo)
         importPath(params)
-        local before = state(catalog, photo)
+        local trace = importDiagnostics(catalog, photo, request)
+        local before = trace.read('before-selection')
         U.checkDeadline(request)
         sameCatalog(catalog)
         request._mutationStarted = true -- Selection is part of the requested action.
         catalog:setSelectedPhotos(photo, {})
+        trace.read('after-selection-request')
         local id = photoId(catalog, photo)
         local untilTime = math.min(request.deadlineAt, U.now() + 5000)
         repeat
@@ -391,8 +478,8 @@ return function(U, config)
             sameCatalog(catalog)
             local selected = selection(catalog)
             if #selected == 1 and photoId(catalog, selected[1]) == id then
-                expected(catalog, photo, before.stateToken)
-                return developSelected(catalog, photo, request)
+                trace.read('selection-completion-guard', before.stateToken)
+                return developSelected(catalog, photo, request, trace)
             end
             if U.now() >= untilTime then break end
             LrTasks.sleep(0.1)
