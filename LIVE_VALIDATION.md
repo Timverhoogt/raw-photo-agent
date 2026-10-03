@@ -1,6 +1,6 @@
 # Live Lightroom validation
 
-Validation performed on macOS with Lightroom Classic 15.5.1 on 27–28 September 2026. The initial guided trial used one Canon CR3 and a separate working virtual copy; a later mask diagnostic used a second CR3 depicting two deer. These are live integrations, distinct from automated tests with simulated bridge responses. In the initial trial the user compared two interpretations and selected B, the closer crop.
+Initial validation ran on macOS with Lightroom Classic 15.5.1 on 27–28 September 2026; later sections record followups through 3 October, including separate Lightroom 15.6 / Camera Raw 18.7 diagnostics. The initial guided trial used one Canon CR3 and a separate working virtual copy; a later mask diagnostic used a second CR3 depicting two deer. These are live integrations, distinct from automated tests with simulated bridge responses. In the initial trial the user compared two interpretations and selected B, the closer crop.
 
 Two saved review JPEGs are included in the [README comparison](docs/example.md), with their source credit and editing context. The detailed journal, native snapshot references, comparison reports, source RAW, and full-size exports remain local. Catalog identifiers, state hashes, and run identifiers are also omitted. A fresh checkout should run the documented acceptance workflow against a photo its user is authorized to edit; this summary is not a reproducible evidence bundle.
 
@@ -142,3 +142,29 @@ Two native trials completed: IMG_0487 subject +0.25 EV and IMG_0478 background +
 A final audit verified the source corpus, staged RAW/XMP files, all sixty TIFF hashes, final native source settings reported by each runner, and released locks. The bridge was idle. Private evidence is `.runtime/validation/roadmap-oct1-campaign.json`; no RAWs or exports were committed.
 
 TypeScript, all 196 Node tests, and 199 Lua 5.1 checks passed before the native trials. The standalone CI flag check exposed an image-library import dependency absent from its clean job; image loading is now lazy. The actual CLI script passes from a copied minimal tree without node_modules, and all 29 focused provider/detail tests pass after that fix. These software checks do not establish real-model quality or photographer preference. Native residual controls, broader scene/boundary validation, import instrumentation, and photographer votes remain next.
+
+## Follow-up — import and render diagnosis, 3 October 2026
+
+The new trials used Lightroom Classic 15.6 build `202609251514-f839cde9`, Camera Raw 18.7 build `2743`, and macOS 27.2.0 build `26B5091g`, following a normal restart. Main graphics processing and GPU preview generation were reverified as Auto; actual GPU export activation was not established. Keep these results separate from the earlier 15.5.1 evidence. No automated tests ran concurrently with the native trials. Full conditions, hypotheses, and diagnostic commands are in [import and render diagnosis](docs/import-render-diagnosis.md).
+
+Two separately staged `IMG_0478.CR3` RAW/XMP imports each issued one native import request and stopped with `STALE_STATE` before any working copy, edit, or export. Immutable native traces now identify the first recorded difference: previously absent `/Temperature` and `/Tint` fields became 5150 and 20, while `WhiteBalance` remained `As Shot`. When starting in Develop, this appeared at `selection-completion-guard`; when starting in Library, it appeared at `develop-completion-guard`, after the selection guard had passed unchanged. This localizes the observed changes without establishing their underlying cause or retrospectively identifying the September failures.
+
+Each failed import retained its shared lock for explicit reconciliation. Three later read-only observations retained the same changed settings and verified the exact staged original. Their scheduled offsets were 0, 1, and 3 seconds; serialized calls began at actual offsets of 0.023, 6.599, and 10.050 seconds in the first case, and 0.041, 6.716, and 8.649 seconds in the second. These are observed timings, not a settling rule. Original and staged RAW/XMP hashes matched. Neither later stability nor the apparent materialization of white-balance values converted either failure into a successful import or an allowed normalization.
+
+The private import reports are `.runtime/diagnostics/import-16819f14-f03b-48b4-9a28-907b1a42a570/results.json` and `.runtime/diagnostics/import-5470f15c-3f1f-44b1-aeea-30e4cd1e668c/results.json`. They preserve request identities, original bridge evidence, full native trace copies and hashes, and the absent-versus-present differences. Instrumentation itself adds readbacks and synchronous writes, so its timing is part of the experimental condition.
+
+A third Library-start import used a separately staged RAW without an XMP sidecar. At `develop-completion-guard`, it added the same temperature/tint values and also added empty `/FilterList` and `/Look/Parameters/PointColors` objects. It stopped with `STALE_STATE` and retained its lock. Followups began at 0.037, 10.181, and 15.744 seconds and retained those changes. The original corpus and derived/staged RAW hashes remained unchanged. Evidence is `.runtime/diagnostics/import-155cdc5d-9e60-4edc-93f9-54a41892c897/results.json`, with separate private parent-lineage evidence. This control shows that an XMP sidecar was not required for white-balance materialization in this case. It supports delayed native readback materialization as a working explanation, without proving a vendor-internal cause or allowing absent and empty values to be treated as equivalent.
+
+A separate render experiment used a new diagnostic virtual copy of the reconciled Library-start original, with a new explicitly recorded baseline. An initial controller JPEG primed rendering. It then captured fifteen 2048 × 1365, 16-bit TIFFs in three fixed blocks:
+
+| Block | Color noise reduction | TIFFs | Exact within-block pairs | Maximum channel-difference range, native uint16 |
+| --- | --- | --- | --- | --- |
+| A1: baseline | 25 | 5 | 0 of 10 | 26–31 |
+| B: intervention | 0 | 5 | 0 of 10 | 26–29 |
+| A2: restored baseline | 25 | 5 | 0 of 10 | 26–42 |
+
+All 25 A1-to-A2 pairs were also nonexact, with maxima of 18–42; they are retained separately from the thirty within-block comparisons. Only color noise reduction changed for the intervention, and one snapshot restoration recovered exact native settings. The source corpus, staged RAW/XMP, baseline and environment evidence, and all saved render hashes verified; the render runner released its lock. Source native state was checked at preflight and copy creation only, without a final reselection or readback of that original.
+
+The completed private report is `.runtime/validation/diagnosis-oct3-render/aba-37114a53-5168-457b-8d2f-7bac343456af/results.json`. Setting color noise reduction to zero did not eliminate variation in this trial. The results establish neither a processing cause nor a pixel tolerance, general determinism, or photographic quality improvement. Autonomous masking remains disabled and exact recovery gates remain unchanged.
+
+Before these native trials, TypeScript, all 206 Node tests, and 245 Lua 5.1 checks passed, including offline import-diagnostic failure controls. Further import/readback and render controls, deliberate native residual tests, broader scene and boundary validation, and blinded photographer votes remain outstanding.

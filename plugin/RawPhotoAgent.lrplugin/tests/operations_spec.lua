@@ -16,6 +16,8 @@ local imports, photoSelections, moduleSwitches, writeDepth = 0, 0, 0, 0
 local failImport, failPhotoSelection, failModuleSwitch = false, false, false
 local importedFormat, switchToOtherPhoto = 'RAW', false
 local onCreateCopy, onSelectPhoto, onSwitchModule, pendingPhotoEvent, photoEventAt
+local onDiagnosticWrite
+local recordBytes = {}
 local activeCatalog
 local function clone(value)
     if type(value) ~= 'table' then return value end
@@ -224,7 +226,12 @@ local mocks = {
 }
 function import(name) assert(mocks[name], name); return mocks[name] end
 local U = dofile(_PLUGIN.path .. '/Util.lua')
-U.writeJson = function(path, record) assert(not records[path]); records[path] = clone(record); files[path] = true end
+U.writeJson = function(path, record, replace)
+    assert(not replace, 'operation evidence must be immutable')
+    if records[path] then U.fail('FILE_EXISTS', 'Refusing to replace existing evidence.') end
+    if onDiagnosticWrite and path:find('/diagnostics/import%-photo/') then onDiagnosticWrite(path, record) end
+    recordBytes[path], records[path], files[path] = U.encode(record), clone(record), true
+end
 U.readJson = function(path) return clone(records[path]) end
 local O = dofile(_PLUGIN.path .. '/Operations.lua')(U, {
     bridgeDir = '/bridge', exportRoot = '/renders', importRoot = '/uploads', checkpoints = '/checkpoints', scratch = '/scratch',
@@ -232,12 +239,21 @@ local O = dofile(_PLUGIN.path .. '/Operations.lua')(U, {
 local requestCount, count = 0, 0
 local function request()
     requestCount = requestCount + 1
-    return { id = '00000000-0000-4000-8000-' .. string.format('%012d', requestCount), deadlineAt = now + 10000 }
+    return { id = '00000000-0000-4000-8000-' .. string.format('%012d', requestCount), issuedAt = now, deadlineAt = now + 10000 }
 end
 local function check(condition, label) assert(condition, label); count = count + 1 end
 local function rejects(code, fn)
     local ok, err = pcall(fn)
     check(not ok and type(err) == 'table' and err.code == code, 'expected ' .. code)
+end
+local function importReadbacks(req)
+    local result = {}
+    local prefix = '/bridge/diagnostics/import-photo/' .. req.id .. '/'
+    for path, record in pairs(records) do
+        if path:sub(1, #prefix) == prefix then result[#result + 1] = record end
+    end
+    table.sort(result, function(a, b) return a.sequence < b.sequence end)
+    return result
 end
 
 check(U.encode(U.array()) == '[]', 'empty array stays array')
@@ -623,6 +639,33 @@ check(importRequest._mutationStarted and imports == 1 and #selected == 1
     and imported.name == 'camera.CR3' and imported.path == uploadedPath and moduleName == 'develop',
     'upload adds one original, selects it exactly, reveals Develop, and returns its descriptor')
 check(importedPhoto.settings.Exposure2012 == 0, 'import applies no development edit to original')
+do
+    local trace = importReadbacks(importRequest)
+    local phases = { 'before-selection', 'after-selection-request', 'selection-completion-guard',
+        'before-develop', 'after-develop-request', 'develop-completion-guard', 'completion-guard' }
+    check(#trace == #phases, 'successful import retains every immutable stage readback')
+    for index, record in ipairs(trace) do
+        check(record.phase == phases[index] and record.sequence == index and record.requestId == importRequest.id
+            and record.operation == 'import_photo' and record.photoId == imported.photoId
+            and record.photo.photoId == imported.photoId and record.photo.path == uploadedPath
+            and record.state.photoId == imported.photoId and record.state.settings.Exposure2012 == 0
+            and record.requestIssuedAt == importRequest.issuedAt and record.requestDeadlineAt == importRequest.deadlineAt
+            and record.capturedAt >= importRequest.issuedAt and record.capturedAt < importRequest.deadlineAt,
+            'readback preserves stage, request, photo, native settings and capture time')
+        check(record.baselineStateToken == trace[1].state.stateToken and #record.changesFromBaseline == 0
+            and #record.changesFromPrevious == 0 and (index == 1 or record.guardStateToken == trace[1].state.stateToken),
+            'successful readback guards remain tied to the original import baseline')
+    end
+    check(#trace[1].selectedPhotoIds == 0 and trace[1].module == 'library'
+        and trace[2].selectedPhotoIds[1] == imported.photoId and trace[#trace].module == 'develop',
+        'selection and module evidence distinguish the before and completion stages')
+    local path = '/bridge/diagnostics/import-photo/' .. importRequest.id .. '/0001.json'
+    local saved = recordBytes[path]
+    local selectionsBefore = photoSelections
+    rejects('FILE_EXISTS', function() O.import_photo(uploadParams, importRequest) end)
+    check(recordBytes[path] == saved and photoSelections == selectionsBefore,
+        'duplicate diagnostic path cannot overwrite prior evidence or repeat selection')
+end
 local importedAgain = O.import_photo(uploadParams, request())
 check(imports == 1 and importedAgain.photoId == imported.photoId, 'duplicate path uses existing catalog original')
 local importedSettings = clone(importedPhoto.settings)
@@ -646,6 +689,7 @@ local function failedImportSelection(code, callback, timeout)
     check(importGuardRequest._mutationStarted and imports == beforeImports
         and photoSelections == beforeSelections + 1 and moduleSwitches == beforeModules,
         'import selection failure is terminal without another import, selection, or module switch')
+    return importGuardRequest
 end
 failedImportSelection('EXPIRED', function(activePhoto)
     delayedPhotoEvent(function() selected = { activePhoto } end, 200)
@@ -653,18 +697,40 @@ end, 200)
 failedImportSelection('EXPIRED', function(activePhoto)
     selected = { activePhoto }; now = now + 200
 end, 200)
-failedImportSelection('STALE_STATE', function(activePhoto)
+local selectionDriftRequest = failedImportSelection('STALE_STATE', function(activePhoto)
     delayedPhotoEvent(function()
         activePhoto.settings.Exposure2012 = 0.1
         selected = { activePhoto }
     end)
 end)
 check(importedPhoto.settings.Exposure2012 == 0.1, 'failed import does not rewrite a native settings difference')
-failedImportSelection('STALE_STATE', function(activePhoto)
+do
+    local trace = importReadbacks(selectionDriftRequest)
+    local failed = trace[#trace]
+    check(#trace == 3 and failed.phase == 'selection-completion-guard'
+        and failed.state.settings.Exposure2012 == 0.1 and trace[1].state.settings.Exposure2012 == 0,
+        'selection guard retains the full mismatching readback before raising STALE_STATE')
+    local change = failed.changesFromBaseline[1]
+    check(#failed.changesFromBaseline == 1 and change.path == '/Exposure2012'
+        and change.beforePresent and change.afterPresent and change.before == 0 and change.after == 0.1,
+        'selection drift records exact changed native values and paths')
+end
+local emptyDriftRequest = failedImportSelection('STALE_STATE', function(activePhoto)
     selected = { activePhoto }
     activePhoto.settings.PointColors = {}
 end)
 check(type(importedPhoto.settings.PointColors) == 'table', 'absent-to-empty native settings change is not normalized away')
+do
+    local trace = importReadbacks(emptyDriftRequest)
+    local failed, initial = trace[#trace], trace[1]
+    local change = failed.changesFromBaseline[1]
+    check(#trace == 2 and failed.phase == 'after-selection-request'
+        and initial.state.settings.PointColors == nil and type(failed.state.settings.PointColors) == 'table',
+        'synchronous selection drift is recorded and rejected at its first observation')
+    check(change.path == '/PointColors' and change.beforePresent == false and change.afterPresent == true
+        and change.before == nil and type(change.after) == 'table' and next(change.after) == nil,
+        'missing-to-empty readbacks preserve explicit absence rather than normalizing it')
+end
 onSelectPhoto, pendingPhotoEvent = nil, nil
 importedPhoto.settings, selected, moduleName = clone(importedSettings), { importedPhoto }, 'library'
 onSwitchModule = function() importedPhoto.settings.Exposure2012 = 0.2 end
@@ -675,7 +741,85 @@ check(importDevelopRequest._mutationStarted and imports == beforeDevelopImports
     and photoSelections == beforeDevelopSelections + 1 and moduleSwitches == beforeDevelopSwitches + 1
     and importedPhoto.settings.Exposure2012 == 0.2,
     'import settings drift on entering Develop remains terminal, without rebasing or restoring the original')
+do
+    local trace = importReadbacks(importDevelopRequest)
+    local failed = trace[#trace]
+    check(#trace == 5 and failed.phase == 'after-develop-request' and failed.module == 'develop'
+        and trace[4].phase == 'before-develop' and trace[4].state.settings.Exposure2012 == 0
+        and failed.state.settings.Exposure2012 == 0.2,
+        'Develop-switch drift is attributed to its first native readback, not a later selection stage')
+    check(failed.guardStateToken == trace[1].state.stateToken
+        and failed.changesFromPrevious[1].path == '/Exposure2012'
+        and failed.changesFromPrevious[1].before == 0 and failed.changesFromPrevious[1].after == 0.2,
+        'Develop drift retains original guard and exact previous-readback difference')
+end
 onSwitchModule, importedPhoto.settings = nil, clone(importedSettings)
+do
+    -- A preexisting empty field disappearing is distinct from the reverse.
+    importedPhoto.settings.PointColors = {}
+    selected = { original }
+    onSelectPhoto = function(p) selected = { p }; p.settings.PointColors = nil end
+    local missingRequest = request()
+    rejects('STALE_STATE', function() O.import_photo(uploadParams, missingRequest) end)
+    local trace = importReadbacks(missingRequest)
+    local change = trace[#trace].changesFromBaseline[1]
+    check(change.path == '/PointColors' and change.beforePresent == true and change.afterPresent == false
+        and type(change.before) == 'table' and next(change.before) == nil and change.after == nil,
+        'empty-to-missing readbacks retain the deleted empty value and its presence flag')
+    importedPhoto.settings = clone(importedSettings)
+    importedPhoto.settings.Nested = { { ['a~/b'] = 1, Gone = {}, Enabled = false } }
+    onSelectPhoto = function(p)
+        selected = { p }
+        p.settings.Nested[1]['a~/b'] = 2; p.settings.Nested[1].Gone = nil
+        p.settings.Nested[1].Added = {}; p.settings.Nested[1].Enabled = true
+    end
+    local nestedRequest = request()
+    rejects('STALE_STATE', function() O.import_photo(uploadParams, nestedRequest) end)
+    trace = importReadbacks(nestedRequest)
+    local paths = {}
+    for _, value in ipairs(trace[#trace].changesFromBaseline) do paths[value.path] = value end
+    check(#trace[#trace].changesFromBaseline == 4 and paths['/Nested/0/a~0~1b'].before == 1
+        and paths['/Nested/0/a~0~1b'].after == 2 and paths['/Nested/0/Enabled'].before == false
+        and paths['/Nested/0/Enabled'].after == true and paths['/Nested/0/Gone'].afterPresent == false
+        and paths['/Nested/0/Added'].beforePresent == false,
+        'nested changes retain zero-based array indices, escaped keys, booleans and additions/deletions')
+    check(trace[1].state.settings.Nested[1]['a~/b'] == 1
+        and type(trace[1].state.settings.Nested[1].Gone) == 'table',
+        'later native mutations cannot alter earlier frozen diagnostic settings')
+    onSelectPhoto, importedPhoto.settings = nil, clone(importedSettings)
+end
+do
+    selected, moduleName = { importedPhoto }, 'develop'
+    local completionRequest = request()
+    onDiagnosticWrite = function(_, record)
+        if record.phase == 'develop-completion-guard' then importedPhoto.settings.Exposure2012 = 0.000001 end
+    end
+    rejects('STALE_STATE', function() O.import_photo(uploadParams, completionRequest) end)
+    onDiagnosticWrite = nil
+    local trace = importReadbacks(completionRequest)
+    check(trace[#trace].phase == 'completion-guard' and trace[#trace].state.settings.Exposure2012 == 0.000001
+        and trace[#trace].changesFromPrevious[1].before == 0,
+        'late drift between Develop and completion guards is retained and cannot become a new baseline')
+    importedPhoto.settings = clone(importedSettings)
+    local deadlineRequest = request()
+    onDiagnosticWrite = function(_, record)
+        if record.phase == 'completion-guard' then now = deadlineRequest.deadlineAt end
+    end
+    rejects('EXPIRED', function() O.import_photo(uploadParams, deadlineRequest) end)
+    onDiagnosticWrite = nil
+    trace = importReadbacks(deadlineRequest)
+    check(trace[#trace].phase == 'completion-guard' and #trace[#trace].changesFromBaseline == 0,
+        'a completion readback remains evidence only when its persistence exhausts the request deadline')
+    local ioRequest = request()
+    local beforeIOSelections = photoSelections
+    onDiagnosticWrite = function(_, record)
+        if record.phase == 'before-selection' then U.fail('IO_ERROR', 'simulated evidence write failure') end
+    end
+    rejects('IO_ERROR', function() O.import_photo(uploadParams, ioRequest) end)
+    onDiagnosticWrite = nil
+    check(photoSelections == beforeIOSelections and #importReadbacks(ioRequest) == 0,
+        'failed initial diagnostic persistence cannot authorize selection or a new baseline')
+end
 local dngPath = uploadDirectory .. '/image.dng'
 files[dngPath], importedFormat = 400, 'DNG'
 local dng = O.import_photo({ path = dngPath, filename = 'image.dng' }, request())

@@ -3,6 +3,7 @@ _PLUGIN = _PLUGIN or { path = 'plugin/RawPhotoAgent.lrplugin' }
 local actualDofile = dofile
 local now, tasks, fs, dispatched, active, peak = 100000, {}, {}, 0, 0, 0
 local observedConfig
+local bridgeLoads, bridgeLoadError, scheduleError, lastDialog = 0, false, false, nil
 local function clone(value)
     if type(value) ~= 'table' then return value end
     local result = {}; for key, item in pairs(value) do result[key] = clone(item) end; return result
@@ -21,7 +22,10 @@ local U = {
     errorObject = function(err) return type(err) == 'table' and err or { code = 'SDK_ERROR', message = tostring(err) } end,
 }
 local T = {}
-function T.startAsyncTask(fn) tasks[#tasks + 1] = { thread = coroutine.create(fn), wake = now } end
+function T.startAsyncTask(fn, name)
+    if scheduleError and name == 'Raw Photo Agent initialize' then error('simulated initializer scheduling failure') end
+    tasks[#tasks + 1] = { thread = coroutine.create(fn), wake = now }
+end
 function T.sleep(seconds) coroutine.yield(seconds * 1000) end
 function T.yield() coroutine.yield(1) end
 -- LrTasks.pcall permits yields; emulate that behavior on stock Lua 5.1.
@@ -36,6 +40,7 @@ function T.pcall(fn)
 end
 local mocks = {
     LrTasks = T,
+    LrDialogs = { message = function(title, text, severity) lastDialog = { title = title, text = text, severity = severity } end },
     LrPathUtils = { child = function(a, b) return a .. '/' .. b end,
         parent = function(path) return path:match('^(.*)/[^/]+$') end,
         leafName = function(path) return path:match('[^/]+$') end },
@@ -70,6 +75,10 @@ function dofile(path)
     if path == _PLUGIN.path .. '/Util.lua' then return U end
     if path == _PLUGIN.path .. '/Operations.lua' then
         return function(_, config) observedConfig = clone(config); return operations end
+    end
+    if path == _PLUGIN.path .. '/Bridge.lua' then
+        bridgeLoads = bridgeLoads + 1
+        if bridgeLoadError then error('simulated bridge load failure') end
     end
     return actualDofile(path)
 end
@@ -149,4 +158,65 @@ actualDofile(_PLUGIN.path .. '/Shutdown.lua')
 tick(1500)
 check(RawPhotoAgentBridge == reloaded and not reloaded.running and not reloaded.workerActive,
     'disable cancels a pending reload rather than starting a new worker')
+check(fs['/bridge/startup.json'].phase == 'cancelled' and not RawPhotoAgentStarting,
+    'cancelled startup leaves an explicit diagnostic phase without restarting')
+
+actualDofile(_PLUGIN.path .. '/Init.lua')
+local startup = fs['/bridge/startup.json']
+check(startup.phase == 'initializer-queued' and startup.generation == RawPhotoAgentLifecycle
+    and startup.startedAt == now and startup.updatedAt == now and startup.previousWorker.workerActive == false,
+    'synchronous diagnostic record distinguishes an initializer that has not run yet')
+tick(1000)
+startup = fs['/bridge/startup.json']
+check(startup.phase == 'worker-launched' and startup.currentWorker.workerActive and startup.currentWorker.running
+    and startup.previousWorker.workerActive == false and not RawPhotoAgentStarting,
+    'successful handoff records released previous ownership and the launched worker')
+actualDofile(_PLUGIN.path .. '/Shutdown.lua'); tick(1500)
+
+local unresolved = { running = true, workerActive = true, currentRequest = id(91) }
+function unresolved.stop() unresolved.running = false end
+RawPhotoAgentBridge = unresolved
+local loadsBeforeTimeout = bridgeLoads
+actualDofile(_PLUGIN.path .. '/Init.lua'); tick(16000)
+startup = fs['/bridge/startup.json']
+check(startup.phase == 'restart-required' and startup.restartRequired
+    and startup.error.code == 'PREVIOUS_WORKER_UNCONFIRMED' and startup.waitDeadlineAt == startup.waitStartedAt + 15000
+    and startup.previousWorker.workerActive and startup.previousWorker.currentRequest == id(91),
+    'bounded wait reports unresolved worker identity and a restart requirement')
+check(RawPhotoAgentBridge == unresolved and unresolved.workerActive and bridgeLoads == loadsBeforeTimeout
+    and not RawPhotoAgentStarting,
+    'timeout never clears old ownership or loads a replacement worker')
+actualDofile(_PLUGIN.path .. '/Status.lua')
+check(lastDialog.severity == 'warning' and lastDialog.text:find('PREVIOUS_WORKER_UNCONFIRMED', 1, true)
+    and lastDialog.text:find('/bridge/startup.json', 1, true) and bridgeLoads == loadsBeforeTimeout,
+    'Status surfaces the diagnostic error and path without automatically retrying startup')
+
+-- A missing legacy ownership flag is unknown, not an acknowledgement of exit.
+unresolved.workerActive, unresolved.currentRequest = nil, nil
+actualDofile(_PLUGIN.path .. '/Init.lua'); tick(16000)
+check(fs['/bridge/startup.json'].phase == 'restart-required' and bridgeLoads == loadsBeforeTimeout,
+    'absent worker ownership flag cannot authorize a replacement')
+unresolved.workerActive = true
+actualDofile(_PLUGIN.path .. '/Init.lua'); tick(200)
+actualDofile(_PLUGIN.path .. '/Shutdown.lua'); tick(1000)
+check(fs['/bridge/startup.json'].phase == 'cancelled' and bridgeLoads == loadsBeforeTimeout
+    and unresolved.workerActive and not RawPhotoAgentStarting,
+    'shutdown cancels a pending bounded wait without releasing prior ownership')
+
+RawPhotoAgentBridge, bridgeLoadError = nil, true
+actualDofile(_PLUGIN.path .. '/Init.lua'); tick(1000)
+startup = fs['/bridge/startup.json']
+check(startup.phase == 'error' and startup.error.message:find('simulated bridge load failure', 1, true)
+    and not RawPhotoAgentStarting and RawPhotoAgentBridge == nil,
+    'initializer exceptions are captured persistently and clear the startup latch')
+actualDofile(_PLUGIN.path .. '/Status.lua')
+check(lastDialog.severity == 'warning' and lastDialog.text:find('simulated bridge load failure', 1, true),
+    'Status reports protected initializer errors rather than a false wait message')
+bridgeLoadError, scheduleError = false, true
+actualDofile(_PLUGIN.path .. '/Init.lua')
+startup = fs['/bridge/startup.json']
+check(startup.phase == 'error' and startup.error.message:find('simulated initializer scheduling failure', 1, true)
+    and not RawPhotoAgentStarting,
+    'failure to schedule initialization is captured before any asynchronous callback')
+scheduleError = false
 print('PASS: ' .. checks .. ' offline IPC checks (mock filesystem/scheduler).')
