@@ -14,6 +14,7 @@ import type { Decision, DecisionInput } from '../agent/core.ts';
 import { cropDetails, readDetailSource } from '../demo/details.ts';
 import type { DetailImage, DetailPoint, DetailSource } from '../demo/details.ts';
 import { verifyRestoredRendering } from '../images.ts';
+import { TonalEvidenceCache } from '../tonal.ts';
 import { hashFile, scanCorpus, stageAsset } from './corpus.ts';
 import type { Corpus } from './corpus.ts';
 
@@ -157,6 +158,7 @@ async function editWithAgent(controller: PhotoController, agent: EvaluationAgent
   let current = baseline; let edits = 0; let points: DetailPoint[] = [];
   const sources = new Map<string, DetailSource>(); const details = new Map<string, DetailImage[]>();
   const candidates: Candidate[] = [baseline]; const history: DecisionInput['history'] = [];
+  const tonal = new TonalEvidenceCache();
   const capture = async (candidate: Candidate) => {
     const rendered = await controller.render(candidate.runId, candidate.id, 8192);
     const source = await readDetailSource(rendered.previewPath!, candidate.stateToken); const first = sources.values().next().value;
@@ -171,6 +173,10 @@ async function editWithAgent(controller: PhotoController, agent: EvaluationAgent
     const input: DecisionInput = { intent, currentCandidateId: current.id, remainingEdits: Math.max(0, maxEdits - edits), history, feedback: [], detailPoints: points,
       candidates: references.map(candidate => ({ id: candidate.id, description: candidate.description ?? '', previewPath: candidate.previewPath!,
         settings: candidate.settings as Record<string, unknown>, sourceWidth: sources.get(candidate.id)?.width, sourceHeight: sources.get(candidate.id)?.height, details: details.get(candidate.id) ?? [] })) };
+    for (const image of selectDecisionImages(input)) {
+      const source = sources.get(image.id);
+      image.tonal = source ? await tonal.measure(source, 'full-size-export') : null;
+    }
     const decision = parseDecision(await agent.decide(input), { ...input, candidates: selectDecisionImages(input) });
     const actual = await controller.state(controller.run(current.runId).workingPhotoId);
     if (actual.stateToken !== current.stateToken) throw new Error('Lightroom changed during model review. Manual edits are preserved.');

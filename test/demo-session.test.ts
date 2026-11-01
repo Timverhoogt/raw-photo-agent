@@ -377,3 +377,18 @@ test('restore checks the reviewed prior token again if Lightroom changes after t
     assert.equal(f.applications, 1); assert.equal(f.renders.length, 4);
   } finally { f.close(); }
 });
+
+test('decisions receive tonal evidence measured from each saved full-size export', async () => {
+  const seen: any[] = [];
+  const f = fixture({ async decide(input) { seen.push(structuredClone(input)); return decision(); } });
+  try {
+    const session = f.engine.start({ useSelected: true, intent: 'Natural' }); await f.engine.idle();
+    assert.equal(session.status, 'completed', session.error ?? 'Expected completed session');
+    const tonal = seen[0].candidates.find((c: { id: string }) => c.id === seen[0].currentCandidateId).tonal;
+    assert.equal(tonal.source, 'full-size-export');
+    assert.deepEqual([tonal.width, tonal.height], [240, 160]);
+    assert.equal(tonal.highlightClippingPercent.anyChannel, 0);
+    assert.equal(tonal.shadowClippingPercent.anyChannel, 0);
+    assert.equal(tonal.luminanceHistogramPercent[6], 100); // The fixture renders a uniform gray of 100.
+  } finally { f.close(); }
+});

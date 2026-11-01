@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import type { Photo, PhotoController, PhotoState } from '../controller.ts';
 import type { Candidate } from '../store.ts';
 import { verifyRestoredRendering } from '../images.ts';
-import { decisionMasks, isRetryableReviewError, LOCAL_ADJUSTMENTS, parseDecision } from '../agent/core.ts';
+import { decisionMasks, isRetryableReviewError, LOCAL_ADJUSTMENTS, parseDecision, selectDecisionImages } from '../agent/core.ts';
 import type { Decision, DecisionInput, DecisionMask } from '../agent/core.ts';
 import { cropDetails, readDetailSource } from './details.ts';
 import type { DetailImage, DetailPoint, DetailSource } from './details.ts';
+import { TonalEvidenceCache } from '../tonal.ts';
 
 export type DemoStatus = 'preparing' | 'running' | 'pausing' | 'paused' | 'awaiting_answer' | 'awaiting_choice' | 'completed' | 'error';
 export interface DemoMask { id: string; label: string }
@@ -50,6 +51,7 @@ export class DemoEngine extends EventEmitter {
   private finalizing = false;
   private finalPath: string | undefined;
   private detailSources: Record<string, DetailSource> = {};
+  private tonalEvidence = new TonalEvidenceCache();
   private detailImages: Record<string, DetailImage[]> = {};
   private detailPoints: DetailPoint[] = [];
   private reviewCheckpoint: string | undefined;
@@ -190,6 +192,13 @@ export class DemoEngine extends EventEmitter {
     // Keep the baseline and the current edit's parent visible on later rounds.
     return [...new Set([all[0], parent, ...all.slice().reverse()].filter((candidate): candidate is Candidate => !!candidate))];
   }
+  private async attachTonalEvidence(input: DecisionInput) {
+    const unavailable = (error: Error) => this.note('status', 'Tonal measurements unavailable', `The review continues without clipping or histogram data for one version. ${error.message}`);
+    for (const image of selectDecisionImages(input)) {
+      const detail = this.detailSources[image.id];
+      image.tonal = detail ? await this.tonalEvidence.measure(detail, 'full-size-export', unavailable) : null;
+    }
+  }
   private async boundary() {
     if (this.stopRequested) { await this.finish(); return true; }
     if (this.pauseRequested) {
@@ -259,6 +268,7 @@ export class DemoEngine extends EventEmitter {
         history: this.session!.events.filter(e => ['observation','adjustment','local-adjustment','restore','inspection'].includes(e.type)).map(e => ({ title: e.title, text: e.text })),
         feedback: this.feedback, remainingEdits: Math.max(0, this.maxEdits - this.edits),
       };
+      await this.attachTonalEvidence(input);
       try {
         decision = await this.agent.decide(input, this.modelAbort.signal);
       } catch (error) {
